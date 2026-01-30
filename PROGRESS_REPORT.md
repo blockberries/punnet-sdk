@@ -1182,3 +1182,425 @@ The capability system enables:
 
 Next phase (Runtime Layer) will use the capability system to grant appropriate capabilities to modules and coordinate effect execution.
 
+
+---
+
+## Phase 5: Runtime and Module System - COMPLETED
+
+### Overview
+Successfully completed the implementation of Phase 5 (Runtime and Module System) for Punnet SDK. This phase introduces the runtime layer for transaction execution, block lifecycle management, and the module system with declarative builders and dependency management.
+
+### Completion Date
+January 30, 2026
+
+---
+
+## Files Created
+
+### Runtime Layer
+
+1. **runtime/context.go**
+   - Execution context for message handlers
+   - BlockHeader with block metadata (height, time, chain ID, proposer)
+   - Effect collection and gas metering
+   - Read-only context support for CheckTx
+   - Account-scoped contexts for transaction execution
+   - Full nil safety on all methods
+
+2. **runtime/handler.go**
+   - Handler type definitions (MsgHandler, QueryHandler)
+   - Block lifecycle handlers (BeginBlocker, EndBlocker)
+   - Genesis handlers (InitGenesis, ExportGenesis)
+   - Re-exported in module package for API compatibility
+
+3. **runtime/router.go**
+   - Message and query routing to module handlers
+   - Module registration with duplicate detection
+   - Thread-safe handler maps with RWMutex
+   - Deterministic ordering (sorted message types and query paths)
+   - Minimal Module interface to avoid circular imports
+
+4. **runtime/lifecycle.go** (stub)
+   - TODO: BeginBlock/EndBlock processing
+   - TODO: Transaction execution coordination
+   - TODO: Event aggregation
+   - TODO: Gas tracking and limits
+
+5. **runtime/genesis.go** (stub)
+   - TODO: InitChain implementation
+   - TODO: Genesis state initialization
+   - TODO: Initial validator set processing
+   - TODO: Export genesis functionality
+
+6. **runtime/application.go** (stub)
+   - TODO: Blockberry Application interface implementation
+   - TODO: CheckTx validation
+   - TODO: ExecuteTx with effect execution
+   - TODO: Commit with IAVL state commitment
+   - TODO: Query routing
+
+### Module System
+
+1. **module/module.go**
+   - Module interface with handler registration
+   - Dependency declaration support
+   - ValidateModule for structural validation
+   - baseModule implementation for embedding
+   - Defensive copying on all accessors
+
+2. **module/handler.go**
+   - Re-exports handler types from runtime package
+   - Avoids circular imports
+   - Maintains API compatibility
+
+3. **module/builder.go**
+   - ModuleBuilder with fluent API
+   - Declarative module construction
+   - Error accumulation pattern
+   - Duplicate detection for handlers
+   - Self-dependency prevention
+
+4. **module/registry.go**
+   - Module registry with dependency management
+   - Topological sort using Kahn's algorithm
+   - Cycle detection in dependency graph
+   - Deterministic initialization order
+   - Thread-safe module registration
+
+### Test Files
+
+1. **runtime/context_test.go**
+   - 18 test functions covering all functionality
+   - BlockHeader validation and defensive copying
+   - Context creation with nil checks
+   - Effect collection and clearing
+   - Gas metering (placeholder)
+   - Read-only context enforcement
+   - Account switching with fresh collectors
+
+2. **runtime/router_test.go**
+   - 25 test functions covering all functionality
+   - Module registration with duplicate detection
+   - Message routing with handler invocation
+   - Query routing
+   - Thread-safety testing
+   - Deterministic ordering tests
+   - Comprehensive nil safety
+
+3. **module/module_test.go**
+   - 8 test functions for module validation
+   - Handler validation (empty types, nil handlers)
+   - Dependency validation (empty, self, duplicate)
+   - Defensive copy verification
+
+4. **module/builder_test.go**
+   - 28 test functions covering all builder methods
+   - Fluent chaining validation
+   - Error propagation testing
+   - Duplicate detection for all handler types
+   - Nil safety on all methods
+   - Complete module construction test
+
+5. **module/registry_test.go**
+   - 20 test functions for registry and topological sort
+   - Simple dependency chain sorting
+   - Diamond dependency pattern
+   - Complex multi-level dependencies
+   - Cycle detection (explicit and self-cycles)
+   - Deterministic ordering verification (10 iterations)
+   - Thread-safe registration
+
+---
+
+## Key Features Implemented
+
+### Runtime Context
+- Block metadata access (height, time, chain ID, proposer)
+- Effect collection with validation
+- Read-only mode for validation (CheckTx)
+- Account-scoped execution contexts
+- Gas metering placeholder (for future implementation)
+- Defensive copying of all returned data
+
+### Message Router
+- Type-based message routing
+- Path-based query routing
+- Module lifecycle hook management
+- Duplicate handler detection
+- Thread-safe concurrent access
+- Deterministic iteration order
+
+### Module System
+- Fluent builder API for ergonomic module creation
+- Declarative dependency specification
+- Automatic dependency validation
+- Topological sorting for initialization order
+- Cycle detection with helpful error messages
+- Re-exportable handler types
+
+---
+
+## Test Coverage
+
+### Runtime Tests
+Total: 43 test functions
+- context_test.go: 18 tests
+- router_test.go: 25 tests
+
+Key test coverage:
+- BlockHeader creation and validation
+- Context creation with error handling
+- Effect emission and collection
+- Gas consumption tracking
+- Router registration and routing
+- Thread-safety with concurrent operations
+- Comprehensive nil safety
+
+### Module Tests
+Total: 56 test functions
+- module_test.go: 8 tests
+- builder_test.go: 28 tests
+- registry_test.go: 20 tests
+
+Key test coverage:
+- Module validation
+- Builder fluent API
+- Dependency management
+- Topological sorting
+- Cycle detection
+- Deterministic ordering
+- Thread-safe registry operations
+
+**Total: 99 new test functions**
+
+All tests pass with race detector enabled.
+
+---
+
+## Architecture Decisions
+
+### Circular Import Resolution
+**Problem**: Module package needs runtime.Context for handlers, runtime package needs module.Module for router.
+
+**Solution**: 
+- Defined handler types in runtime package
+- Re-exported in module package for API compatibility
+- Defined minimal Module interface in runtime package
+- Full module.Module interface extends this with Dependencies()
+
+This approach:
+- Avoids circular imports
+- Maintains clean separation of concerns
+- Provides type aliases for ergonomic API
+- Allows full module implementation in module package
+
+### Dependency Management
+**Design**: Topological sort with Kahn's algorithm
+
+**Benefits**:
+- O(V + E) time complexity
+- Deterministic ordering with sorting at each step
+- Clear cycle detection
+- Helpful error messages with cycle participants
+
+**Validation**:
+- Self-dependency prevention at builder level
+- Duplicate dependency detection at builder level
+- Missing dependency detection at registry level
+- Cycle detection at build time
+
+### Error Accumulation in Builder
+**Pattern**: Accumulate errors, check once at Build()
+
+**Benefits**:
+- Fluent chaining continues despite errors
+- Single error check at the end
+- Clear error messages with context
+- Prevents partial module construction
+
+---
+
+## Code Quality Metrics
+
+### Nil Safety
+- All public methods check for nil receivers
+- All inputs validated before use
+- Defensive copies prevent external mutation
+- No panic on nil access
+
+### Thread Safety
+- Router uses RWMutex for concurrent access
+- Registry uses RWMutex for concurrent registration
+- Defensive copies prevent race conditions
+- Concurrent tests verify safety
+
+### Determinism
+- All map iterations sorted before returning
+- Topological sort is deterministic (verified with 10 runs)
+- Module initialization order is reproducible
+- Message types and query paths always in sorted order
+
+### Error Handling
+- All errors wrapped with context
+- Sentinel errors at package level
+- Validation errors include details
+- No silent failures
+
+---
+
+## Integration with Previous Phases
+
+### Effect System Integration
+- Context collects effects from handlers
+- Effects validated before collection
+- Effect execution happens in runtime (stub)
+
+### Capability System Integration
+- Capabilities will be granted by CapabilityManager (in Application stub)
+- Module namespacing via capability prefixes
+- Controlled state access for modules
+
+### Types Integration
+- BlockHeader for block metadata
+- Message interface for routing
+- TxResult, ValidatorUpdate for results
+- Event types for effect emission
+
+---
+
+## Stub Implementations
+
+The following files contain TODOs for Phase 6 implementation:
+
+1. **runtime/lifecycle.go**
+   - BeginBlock/EndBlock coordination
+   - Transaction execution loop
+   - Event aggregation
+   - Gas tracking
+
+2. **runtime/genesis.go**
+   - InitChain implementation
+   - Module genesis initialization
+   - Validator set initialization
+   - Genesis export
+
+3. **runtime/application.go**
+   - Blockberry Application interface
+   - CheckTx validation
+   - ExecuteTx with authorization and effect execution
+   - Commit with IAVL persistence
+   - Query routing
+
+These stubs provide clear interfaces and documentation for future implementation.
+
+---
+
+## Adherence to Guidelines
+
+### CLAUDE.md Compliance
+- ✓ Effect-based execution: Handlers return effects, don't mutate state
+- ✓ Declarative modules: Builder pattern for ergonomic creation
+- ✓ Dependency management: Registry validates and sorts
+- ✓ Defensive copying: All returned slices copied
+- ✓ Nil checks: All public methods check nil
+- ✓ Error wrapping: All errors include context
+- ✓ Thread-safe: Router and Registry use RWMutex
+- ✓ Deterministic: All map iterations sorted
+
+### Code Conventions
+- ✓ Package structure matches guidelines (runtime/, module/)
+- ✓ Naming conventions (Context, Router, Module, ModuleBuilder, Registry)
+- ✓ Error sentinel values at package level
+- ✓ Test files with `_test.go` suffix
+- ✓ Comprehensive documentation
+- ✓ No AI attribution in code
+
+### Testing Guidelines
+- ✓ Unit tests in same package
+- ✓ Table-driven tests where appropriate
+- ✓ Race detector enabled on all tests
+- ✓ Test effect generation separately from execution
+- ✓ Test dependency management thoroughly
+- ✓ No shared global state
+
+---
+
+## Performance Considerations
+
+### Router Performance
+- O(1) handler lookup by message type
+- O(1) handler lookup by query path
+- RWMutex allows concurrent reads
+- Minimal overhead for routing
+
+### Module Registry
+- O(V + E) topological sort (Kahn's algorithm)
+- One-time cost at startup
+- Deterministic with minimal overhead
+- Efficient dependency graph construction
+
+### Context Performance
+- Minimal overhead (struct with a few fields)
+- Effect collection is append-only
+- Gas tracking is simple counter (placeholder)
+- Defensive copies only on accessor methods
+
+---
+
+## Security Considerations
+
+### Module Isolation
+- Modules only access state via capabilities (to be granted in Application)
+- No direct store access
+- Controlled handler registration
+- Namespace isolation via capability prefixes
+
+### Handler Security
+- Type-safe handler signatures
+- Validation before routing
+- Error handling at routing layer
+- No handler can be invoked without registration
+
+### Dependency Security
+- Cycle detection prevents infinite loops
+- Self-dependency prevented
+- Missing dependencies caught at registration
+- Deterministic initialization order
+
+---
+
+## Summary
+
+Phase 5 (Runtime and Module System) is now complete with:
+- Full runtime context implementation with 18 tests
+- Message and query router with 25 tests  
+- Module interface and base implementation with 8 tests
+- ModuleBuilder with fluent API and 28 tests
+- Module registry with topological sort and 20 tests
+- Stub implementations for lifecycle, genesis, and application
+
+**Total Implementation**:
+- 6 runtime source files (3 complete, 3 stubs)
+- 4 module source files (all complete)
+- 5 test files with 99 test functions
+- All tests pass with race detector enabled
+- Zero build warnings or errors
+
+The runtime and module system provides:
+- Execution context with block metadata and effect collection
+- Message routing to module handlers
+- Query routing to module query handlers
+- Declarative module construction via builder
+- Dependency management with cycle detection
+- Deterministic initialization ordering
+- Thread-safe registration and routing
+- Clean separation of concerns
+
+This completes the foundation for the Application layer. The next phase will implement:
+- Complete lifecycle management (BeginBlock, ExecuteTx, EndBlock)
+- Genesis initialization (InitChain)
+- Full Application implementation with Blockberry integration
+- IAVL state store integration
+- Transaction authorization and execution
+- Effect collection and parallel execution
+
