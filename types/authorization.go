@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/ed25519"
+	"crypto/subtle"
 	"fmt"
 )
 
@@ -49,15 +50,36 @@ type Authorization struct {
 }
 
 // NewAuthorization creates a new authorization with signatures
+// Creates defensive deep copy of signatures to prevent external mutation
 func NewAuthorization(signatures ...Signature) *Authorization {
+	// Create defensive deep copy of signatures
+	sigsCopy := make([]Signature, len(signatures))
+	for i, sig := range signatures {
+		// Deep copy each signature's byte slices
+		pubKeyCopy := make([]byte, len(sig.PubKey))
+		copy(pubKeyCopy, sig.PubKey)
+
+		sigCopy := make([]byte, len(sig.Signature))
+		copy(sigCopy, sig.Signature)
+
+		sigsCopy[i] = Signature{
+			PubKey:    pubKeyCopy,
+			Signature: sigCopy,
+		}
+	}
+
 	return &Authorization{
-		Signatures:            signatures,
+		Signatures:            sigsCopy,
 		AccountAuthorizations: make(map[AccountName]*Authorization),
 	}
 }
 
 // ValidateBasic performs basic validation
 func (a *Authorization) ValidateBasic() error {
+	if a == nil {
+		return fmt.Errorf("%w: authorization is nil", ErrInvalidAuthorization)
+	}
+
 	// Validate all signatures
 	for i, sig := range a.Signatures {
 		if err := sig.ValidateBasic(); err != nil {
@@ -100,6 +122,16 @@ type AccountGetter interface {
 // VerifyAuthorization verifies that the authorization meets the account's authority threshold
 // It recursively verifies delegated account authorizations and detects cycles
 func (a *Authorization) VerifyAuthorization(account *Account, message []byte, getter AccountGetter) error {
+	if a == nil {
+		return fmt.Errorf("%w: authorization is nil", ErrInvalidAuthorization)
+	}
+	if account == nil {
+		return fmt.Errorf("%w: account is nil", ErrInvalidAuthorization)
+	}
+	if getter == nil {
+		return fmt.Errorf("%w: account getter is nil", ErrInvalidAuthorization)
+	}
+
 	// Verify all direct signatures first
 	if err := a.VerifySignatures(message); err != nil {
 		return err
@@ -153,7 +185,12 @@ func (a *Authorization) calculateWeight(
 	for _, sig := range a.Signatures {
 		if authority.HasKey(sig.PubKey) {
 			if sig.Verify(message) {
-				totalWeight += authority.GetKeyWeight(sig.PubKey)
+				keyWeight := authority.GetKeyWeight(sig.PubKey)
+				// Check for overflow
+				if totalWeight > ^uint64(0)-keyWeight {
+					return 0, fmt.Errorf("weight calculation overflow")
+				}
+				totalWeight += keyWeight
 			}
 		}
 	}
@@ -187,7 +224,12 @@ func (a *Authorization) calculateWeight(
 		// If the delegated account's authorization is valid (meets its threshold),
 		// add the delegation weight to total
 		if delegatedWeight >= delegatedAccount.Authority.Threshold {
-			totalWeight += authority.GetAccountWeight(delegatedAcct)
+			accountWeight := authority.GetAccountWeight(delegatedAcct)
+			// Check for overflow
+			if totalWeight > ^uint64(0)-accountWeight {
+				return 0, fmt.Errorf("weight calculation overflow")
+			}
+			totalWeight += accountWeight
 		}
 	}
 
@@ -208,7 +250,8 @@ func (a *Authorization) GetSignedPubKeys(message []byte) [][]byte {
 // HasSignatureFrom checks if there's a valid signature from a specific public key
 func (a *Authorization) HasSignatureFrom(pubKey []byte, message []byte) bool {
 	for _, sig := range a.Signatures {
-		if string(sig.PubKey) == string(pubKey) {
+		// Use constant-time comparison to prevent timing attacks
+		if len(sig.PubKey) == len(pubKey) && subtle.ConstantTimeCompare(sig.PubKey, pubKey) == 1 {
 			return sig.Verify(message)
 		}
 	}

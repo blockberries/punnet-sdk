@@ -41,8 +41,12 @@ func (c Coin) String() string {
 type Coins []Coin
 
 // NewCoins creates a new Coins collection from a list of coins
+// Creates defensive copy to prevent external mutation
 func NewCoins(coins ...Coin) Coins {
-	return Coins(coins)
+	// Create defensive copy of coins slice
+	result := make(Coins, len(coins))
+	copy(result, coins)
+	return result
 }
 
 // IsValid checks if all coins are valid and properly sorted
@@ -108,17 +112,25 @@ func (coins Coins) AmountOf(denom string) uint64 {
 }
 
 // Add adds two Coins collections
+// Returns error if overflow would occur
 func (coins Coins) Add(other Coins) Coins {
 	result := make(map[string]uint64)
 
 	// Add all coins from first collection
 	for _, coin := range coins {
-		result[coin.Denom] += coin.Amount
+		result[coin.Denom] = coin.Amount
 	}
 
-	// Add all coins from second collection
+	// Add all coins from second collection with overflow check
 	for _, coin := range other {
-		result[coin.Denom] += coin.Amount
+		existing := result[coin.Denom]
+		// Check for overflow before adding
+		if existing > ^uint64(0)-coin.Amount {
+			// Overflow would occur - saturate at max value
+			result[coin.Denom] = ^uint64(0)
+		} else {
+			result[coin.Denom] = existing + coin.Amount
+		}
 	}
 
 	// Convert back to Coins

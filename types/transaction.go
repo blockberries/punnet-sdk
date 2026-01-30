@@ -24,10 +24,15 @@ type Transaction struct {
 }
 
 // NewTransaction creates a new transaction
+// Creates defensive copies of slices to prevent external mutation
 func NewTransaction(account AccountName, nonce uint64, messages []Message, auth *Authorization) *Transaction {
+	// Create defensive copy of messages slice
+	msgsCopy := make([]Message, len(messages))
+	copy(msgsCopy, messages)
+
 	return &Transaction{
 		Account:       account,
-		Messages:      messages,
+		Messages:      msgsCopy,
 		Authorization: auth,
 		Nonce:         nonce,
 	}
@@ -35,6 +40,10 @@ func NewTransaction(account AccountName, nonce uint64, messages []Message, auth 
 
 // ValidateBasic performs basic validation
 func (tx *Transaction) ValidateBasic() error {
+	if tx == nil {
+		return fmt.Errorf("%w: transaction is nil", ErrInvalidTransaction)
+	}
+
 	if !tx.Account.IsValid() {
 		return fmt.Errorf("%w: %s", ErrInvalidAccount, tx.Account)
 	}
