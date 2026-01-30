@@ -54,6 +54,9 @@ func (m *BankModule) handleSend(ctx *runtime.Context, msg types.Message) ([]effe
 	if m == nil || m.balanceCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
 	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
 
 	sendMsg, ok := msg.(*MsgSend)
 	if !ok {
@@ -96,6 +99,9 @@ func (m *BankModule) handleSend(ctx *runtime.Context, msg types.Message) ([]effe
 func (m *BankModule) handleMultiSend(ctx *runtime.Context, msg types.Message) ([]effects.Effect, error) {
 	if m == nil || m.balanceCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
 	}
 
 	multiSendMsg, ok := msg.(*MsgMultiSend)

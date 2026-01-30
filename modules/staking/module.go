@@ -67,6 +67,9 @@ func (m *StakingModule) handleCreateValidator(ctx *runtime.Context, msg types.Me
 	if m == nil || m.validatorCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
 	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
 
 	createMsg, ok := msg.(*MsgCreateValidator)
 	if !ok {
@@ -113,6 +116,9 @@ func (m *StakingModule) handleCreateValidator(ctx *runtime.Context, msg types.Me
 func (m *StakingModule) handleDelegate(ctx *runtime.Context, msg types.Message) ([]effects.Effect, error) {
 	if m == nil || m.validatorCap == nil || m.balanceCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
 	}
 
 	delegateMsg, ok := msg.(*MsgDelegate)
@@ -188,6 +194,9 @@ func (m *StakingModule) handleDelegate(ctx *runtime.Context, msg types.Message) 
 func (m *StakingModule) handleUndelegate(ctx *runtime.Context, msg types.Message) ([]effects.Effect, error) {
 	if m == nil || m.validatorCap == nil || m.balanceCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
 	}
 
 	undelegateMsg, ok := msg.(*MsgUndelegate)

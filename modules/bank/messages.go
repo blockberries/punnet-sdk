@@ -168,18 +168,28 @@ func (m *MsgMultiSend) ValidateBasic() error {
 		}
 	}
 
-	// Calculate total inputs and outputs
+	// Calculate total inputs and outputs with overflow protection
 	totalInputs := make(map[string]uint64)
 	for _, input := range m.Inputs {
 		for _, coin := range input.Coins {
-			totalInputs[coin.Denom] += coin.Amount
+			existing := totalInputs[coin.Denom]
+			// Check for overflow
+			if existing > ^uint64(0)-coin.Amount {
+				return fmt.Errorf("input total overflow for denom %s", coin.Denom)
+			}
+			totalInputs[coin.Denom] = existing + coin.Amount
 		}
 	}
 
 	totalOutputs := make(map[string]uint64)
 	for _, output := range m.Outputs {
 		for _, coin := range output.Coins {
-			totalOutputs[coin.Denom] += coin.Amount
+			existing := totalOutputs[coin.Denom]
+			// Check for overflow
+			if existing > ^uint64(0)-coin.Amount {
+				return fmt.Errorf("output total overflow for denom %s", coin.Denom)
+			}
+			totalOutputs[coin.Denom] = existing + coin.Amount
 		}
 	}
 

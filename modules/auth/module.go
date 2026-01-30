@@ -55,6 +55,9 @@ func (m *AuthModule) handleCreateAccount(ctx *runtime.Context, msg types.Message
 	if m == nil || m.accountCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
 	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
 
 	createMsg, ok := msg.(*MsgCreateAccount)
 	if !ok {
@@ -112,6 +115,9 @@ func (m *AuthModule) handleUpdateAuthority(ctx *runtime.Context, msg types.Messa
 	if m == nil || m.accountCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
 	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
 
 	updateMsg, ok := msg.(*MsgUpdateAuthority)
 	if !ok {
@@ -156,6 +162,9 @@ func (m *AuthModule) handleUpdateAuthority(ctx *runtime.Context, msg types.Messa
 func (m *AuthModule) handleDeleteAccount(ctx *runtime.Context, msg types.Message) ([]effects.Effect, error) {
 	if m == nil || m.accountCap == nil {
 		return nil, fmt.Errorf("module or capability is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
 	}
 
 	deleteMsg, ok := msg.(*MsgDeleteAccount)
