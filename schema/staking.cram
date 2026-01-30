@@ -1,0 +1,193 @@
+// Cramberry Schema for Staking Module
+// This file defines the binary serialization format for staking module messages and types
+//
+// Field numbers are STABLE and must never be reused or changed.
+
+syntax = "proto3";
+
+package punnet.staking.v1;
+
+import "types.cram";
+
+option go_package = "github.com/blockberries/punnet-sdk/modules/staking/generated";
+
+// MsgCreateValidator creates a new validator
+// Type URL: /punnet.staking.v1.MsgCreateValidator
+message MsgCreateValidator {
+  // Delegator is the account that controls this validator
+  string delegator = 1;
+
+  // PubKey is the validator's Ed25519 public key (32 bytes)
+  // This is the consensus public key used for block signing
+  bytes pub_key = 2;
+
+  // InitialPower is the initial voting power
+  // Power determines the validator's weight in consensus
+  int64 initial_power = 3;
+
+  // Commission is the commission rate (0-10000, where 10000 = 100%)
+  // Commission is taken from delegator rewards
+  uint64 commission = 4;
+}
+
+// MsgDelegate delegates tokens to a validator
+// Type URL: /punnet.staking.v1.MsgDelegate
+message MsgDelegate {
+  // Delegator is the account delegating
+  string delegator = 1;
+
+  // Validator is the validator's public key
+  bytes validator = 2;
+
+  // Amount is the coin to delegate
+  // Typically in the chain's staking denomination
+  punnet.types.v1.Coin amount = 3;
+}
+
+// MsgUndelegate removes delegation from a validator
+// Type URL: /punnet.staking.v1.MsgUndelegate
+message MsgUndelegate {
+  // Delegator is the account undelegating
+  string delegator = 1;
+
+  // Validator is the validator's public key
+  bytes validator = 2;
+
+  // Amount is the coin to undelegate
+  punnet.types.v1.Coin amount = 3;
+}
+
+// Validator represents a blockchain validator
+// This is a storage type, not a message type
+message Validator {
+  // PubKey is the validator's Ed25519 public key (32 bytes)
+  bytes pub_key = 1;
+
+  // Power is the validator's voting power
+  // Power = 0 means validator is inactive
+  int64 power = 2;
+
+  // Delegator is the account that controls this validator
+  string delegator = 3;
+
+  // Commission is the commission rate (0-10000, where 10000 = 100%)
+  uint64 commission = 4;
+
+  // Active indicates if the validator is active
+  bool active = 5;
+
+  // Jailed indicates if the validator is jailed (slashed)
+  bool jailed = 6;
+
+  // JailedUntil is the time when the validator can be unjailed (Unix nanoseconds)
+  // Only meaningful if jailed = true
+  int64 jailed_until = 7;
+}
+
+// Delegation represents a delegation to a validator
+// This is a storage type, not a message type
+message Delegation {
+  // Delegator is the account delegating
+  string delegator = 1;
+
+  // Validator is the validator's public key
+  bytes validator = 2;
+
+  // Shares is the number of shares owned
+  // Shares represent proportional ownership of the validator's total stake
+  uint64 shares = 3;
+
+  // CreatedAt is when the delegation was created (Unix nanoseconds)
+  int64 created_at = 4;
+
+  // UpdatedAt is when the delegation was last modified (Unix nanoseconds)
+  int64 updated_at = 5;
+}
+
+// UnbondingDelegation represents a delegation in the unbonding period
+// This is a storage type, not a message type
+message UnbondingDelegation {
+  // Delegator is the account undelegating
+  string delegator = 1;
+
+  // Validator is the validator's public key
+  bytes validator = 2;
+
+  // Amount is the undelegating amount
+  punnet.types.v1.Coin amount = 3;
+
+  // CompletionTime is when the unbonding completes (Unix nanoseconds)
+  int64 completion_time = 4;
+}
+
+// ValidatorQueryRequest queries a validator by public key
+message ValidatorQueryRequest {
+  // PubKey is the validator's public key
+  bytes pub_key = 1;
+}
+
+// ValidatorQueryResponse returns validator data
+message ValidatorQueryResponse {
+  // Validator is the requested validator (nil if not found)
+  Validator validator = 1;
+}
+
+// ValidatorsQueryRequest queries all validators
+message ValidatorsQueryRequest {
+  // ActiveOnly filters to only active validators
+  bool active_only = 1;
+
+  // Limit is the maximum number of validators to return (0 = no limit)
+  uint32 limit = 2;
+
+  // Offset is the number of validators to skip
+  uint32 offset = 3;
+}
+
+// ValidatorsQueryResponse returns a list of validators
+message ValidatorsQueryResponse {
+  // Validators is the list of validators
+  repeated Validator validators = 1;
+
+  // Total is the total number of validators (before pagination)
+  uint64 total = 2;
+}
+
+// DelegationQueryRequest queries a delegation
+message DelegationQueryRequest {
+  // Delegator is the delegator account
+  string delegator = 1;
+
+  // Validator is the validator's public key
+  bytes validator = 2;
+}
+
+// DelegationQueryResponse returns delegation data
+message DelegationQueryResponse {
+  // Delegation is the requested delegation (nil if not found)
+  Delegation delegation = 1;
+}
+
+// DelegatorDelegationsQueryRequest queries all delegations for a delegator
+message DelegatorDelegationsQueryRequest {
+  // Delegator is the delegator account
+  string delegator = 1;
+}
+
+// DelegatorDelegationsQueryResponse returns a list of delegations
+message DelegatorDelegationsQueryResponse {
+  // Delegations is the list of delegations
+  repeated Delegation delegations = 1;
+}
+
+// ValidatorDelegationsQueryRequest queries all delegations to a validator
+message ValidatorDelegationsQueryRequest {
+  // Validator is the validator's public key
+  bytes validator = 1;
+}
+
+// ValidatorDelegationsQueryResponse returns a list of delegations
+message ValidatorDelegationsQueryResponse {
+  // Delegations is the list of delegations
+  repeated Delegation delegations = 1;
+}

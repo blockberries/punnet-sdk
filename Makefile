@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint clean install-tools
+.PHONY: all build test test-race lint clean install-tools generate
 
 all: build test
 
@@ -39,3 +39,18 @@ mod-tidy:
 mod-download:
 	@echo "Downloading dependencies..."
 	@go mod download
+
+generate:
+	@echo "Generating code from Cramberry schemas..."
+	@echo "TODO: Install cramberry compiler and generate Go code"
+	@echo "cramberry generate -lang go -out ./types/generated ./schema/types.cram"
+	@echo "cramberry generate -lang go -out ./modules/auth/generated ./schema/auth.cram"
+	@echo "cramberry generate -lang go -out ./modules/bank/generated ./schema/bank.cram"
+	@echo "cramberry generate -lang go -out ./modules/staking/generated ./schema/staking.cram"
+
+clean-generated:
+	@echo "Cleaning generated files..."
+	@rm -rf ./types/generated
+	@rm -rf ./modules/auth/generated
+	@rm -rf ./modules/bank/generated
+	@rm -rf ./modules/staking/generated

@@ -1,0 +1,80 @@
+// Cramberry Schema for Auth Module
+// This file defines the binary serialization format for auth module messages
+//
+// Field numbers are STABLE and must never be reused or changed.
+
+syntax = "proto3";
+
+package punnet.auth.v1;
+
+import "types.cram";
+
+option go_package = "github.com/blockberries/punnet-sdk/modules/auth/generated";
+
+// MsgCreateAccount creates a new account
+// Type URL: /punnet.auth.v1.MsgCreateAccount
+message MsgCreateAccount {
+  // Name is the new account name (max 64 bytes)
+  // Must match pattern: ^[a-z0-9.]+$
+  string name = 1;
+
+  // PubKey is the Ed25519 public key for the account (32 bytes)
+  // This key is added to the initial authority with weight=1
+  bytes pub_key = 2;
+
+  // Authority is the authorization structure
+  // Defines who can act on behalf of this account
+  punnet.types.v1.Authority authority = 3;
+}
+
+// MsgUpdateAuthority updates an account's authority
+// Type URL: /punnet.auth.v1.MsgUpdateAuthority
+message MsgUpdateAuthority {
+  // Name is the account to update
+  string name = 1;
+
+  // NewAuthority is the new authority structure
+  // Completely replaces the existing authority
+  punnet.types.v1.Authority new_authority = 2;
+}
+
+// MsgDeleteAccount deletes an account
+// Type URL: /punnet.auth.v1.MsgDeleteAccount
+//
+// WARNING: This is a destructive operation that permanently removes
+// the account. Any associated balances or delegations should be
+// handled before deletion.
+message MsgDeleteAccount {
+  // Name is the account to delete
+  string name = 1;
+}
+
+// AccountQueryRequest queries an account by name
+message AccountQueryRequest {
+  // Name is the account name to query
+  string name = 1;
+}
+
+// AccountQueryResponse returns account data
+message AccountQueryResponse {
+  // Account is the requested account (nil if not found)
+  punnet.types.v1.Account account = 1;
+}
+
+// AccountListQueryRequest queries all accounts (with pagination)
+message AccountListQueryRequest {
+  // Limit is the maximum number of accounts to return (0 = no limit)
+  uint32 limit = 1;
+
+  // Offset is the number of accounts to skip
+  uint32 offset = 2;
+}
+
+// AccountListQueryResponse returns a list of accounts
+message AccountListQueryResponse {
+  // Accounts is the list of accounts
+  repeated punnet.types.v1.Account accounts = 1;
+
+  // Total is the total number of accounts (before pagination)
+  uint64 total = 2;
+}

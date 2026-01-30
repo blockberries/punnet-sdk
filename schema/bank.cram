@@ -1,0 +1,111 @@
+// Cramberry Schema for Bank Module
+// This file defines the binary serialization format for bank module messages and types
+//
+// Field numbers are STABLE and must never be reused or changed.
+
+syntax = "proto3";
+
+package punnet.bank.v1;
+
+import "types.cram";
+
+option go_package = "github.com/blockberries/punnet-sdk/modules/bank/generated";
+
+// MsgSend transfers coins from one account to another
+// Type URL: /punnet.bank.v1.MsgSend
+message MsgSend {
+  // From is the sender account
+  string from = 1;
+
+  // To is the recipient account
+  string to = 2;
+
+  // Amount is the coin to send
+  punnet.types.v1.Coin amount = 3;
+}
+
+// Input represents an input for multi-send
+message Input {
+  // Address is the sender account
+  string address = 1;
+
+  // Coins is the list of coins to send
+  // Must be sorted by denom with no duplicates
+  repeated punnet.types.v1.Coin coins = 2;
+}
+
+// Output represents an output for multi-send
+message Output {
+  // Address is the recipient account
+  string address = 1;
+
+  // Coins is the list of coins to receive
+  // Must be sorted by denom with no duplicates
+  repeated punnet.types.v1.Coin coins = 2;
+}
+
+// MsgMultiSend transfers coins from multiple accounts to multiple accounts
+// Type URL: /punnet.bank.v1.MsgMultiSend
+//
+// Invariant: Total inputs must equal total outputs for each denomination
+message MsgMultiSend {
+  // Inputs are the sender accounts and amounts
+  repeated Input inputs = 1;
+
+  // Outputs are the recipient accounts and amounts
+  repeated Output outputs = 2;
+}
+
+// Balance represents an account's balance for a specific denomination
+// This is a storage type, not a message type
+message Balance {
+  // Account is the account name
+  string account = 1;
+
+  // Denom is the token denomination
+  string denom = 2;
+
+  // Amount is the balance amount (non-negative)
+  uint64 amount = 3;
+}
+
+// BalanceQueryRequest queries an account's balance for a specific denom
+message BalanceQueryRequest {
+  // Account is the account name
+  string account = 1;
+
+  // Denom is the token denomination
+  string denom = 2;
+}
+
+// BalanceQueryResponse returns balance data
+message BalanceQueryResponse {
+  // Balance is the requested balance
+  Balance balance = 1;
+}
+
+// AllBalancesQueryRequest queries all balances for an account
+message AllBalancesQueryRequest {
+  // Account is the account name
+  string account = 1;
+}
+
+// AllBalancesQueryResponse returns all balances for an account
+message AllBalancesQueryResponse {
+  // Balances is the list of balances
+  // Sorted by denom for deterministic ordering
+  repeated Balance balances = 1;
+}
+
+// SupplyQueryRequest queries the total supply of a denomination
+message SupplyQueryRequest {
+  // Denom is the token denomination (empty = all denoms)
+  string denom = 1;
+}
+
+// SupplyQueryResponse returns supply data
+message SupplyQueryResponse {
+  // Supply is the list of total supplies by denomination
+  // Sorted by denom for deterministic ordering
+  repeated punnet.types.v1.Coin supply = 1;
+}

@@ -1,0 +1,214 @@
+// Cramberry Schema for Punnet SDK Core Types
+// This file defines the binary serialization format for core types
+//
+// Field numbers are STABLE and must never be reused or changed.
+// All fields use deterministic encoding suitable for blockchain consensus.
+//
+// Encoding conventions:
+// - bytes: length-prefixed byte arrays
+// - string: UTF-8 encoded, length-prefixed
+// - uint64/int64: varint encoding for compact representation
+// - bool: single byte (0 or 1)
+// - repeated: packed encoding where applicable
+// - map: sorted by key for deterministic ordering
+
+syntax = "proto3";
+
+package punnet.types.v1;
+
+option go_package = "github.com/blockberries/punnet-sdk/types/generated";
+
+// Account represents a named account with hierarchical permissions
+message Account {
+  // Name is the human-readable account identifier (max 64 bytes)
+  // Must match pattern: ^[a-z0-9.]+$
+  string name = 1;
+
+  // Authority defines who can act on behalf of this account
+  Authority authority = 2;
+
+  // Nonce prevents replay attacks (monotonically increasing)
+  uint64 nonce = 3;
+
+  // CreatedAt is when the account was created (Unix timestamp in nanoseconds)
+  int64 created_at = 4;
+
+  // UpdatedAt is when the account was last modified (Unix timestamp in nanoseconds)
+  int64 updated_at = 5;
+}
+
+// Authority defines who can authorize actions for an account
+message Authority {
+  // Threshold is the minimum weight required for authorization
+  uint64 threshold = 1;
+
+  // KeyWeights maps public keys (Ed25519, 32 bytes) to their authorization weight
+  // Keys are hex-encoded for deterministic map ordering
+  map<string, uint64> key_weights = 2;
+
+  // AccountWeights maps account names to their delegation weight
+  // Enables hierarchical permissions where accounts can delegate authority
+  // Keys are sorted lexicographically for deterministic ordering
+  map<string, uint64> account_weights = 3;
+}
+
+// Authorization represents proof of authority to perform an action
+message Authorization {
+  // Signatures from keys in the account's authority
+  repeated Signature signatures = 1;
+
+  // AccountAuthorizations maps delegated account names to their authorizations
+  // This enables recursive/hierarchical authorization
+  // Keys are sorted lexicographically for deterministic ordering
+  map<string, Authorization> account_authorizations = 2;
+}
+
+// Signature represents a single Ed25519 signature with public key
+message Signature {
+  // PubKey is the Ed25519 public key (32 bytes)
+  bytes pub_key = 1;
+
+  // Signature is the Ed25519 signature (64 bytes)
+  bytes signature = 2;
+}
+
+// Coin represents a single token with denomination and amount
+message Coin {
+  // Denom is the token denomination (max 64 bytes)
+  // Examples: "stake", "uatom", "eth"
+  string denom = 1;
+
+  // Amount is the token amount (non-negative)
+  uint64 amount = 2;
+}
+
+// Coins represents a collection of coins
+// Must be sorted by denom (lexicographic) with no duplicates
+message Coins {
+  repeated Coin coins = 1;
+}
+
+// Transaction represents a signed transaction
+message Transaction {
+  // Account is the account executing this transaction
+  string account = 1;
+
+  // Messages are the messages to execute (type-prefixed)
+  // Each message is encoded as: [type_url: string][value: bytes]
+  repeated Any messages = 2;
+
+  // Authorization proves the account authorized this transaction
+  Authorization authorization = 3;
+
+  // Nonce prevents replay attacks (must match account nonce)
+  uint64 nonce = 4;
+
+  // Memo is an optional memo (max 512 bytes)
+  string memo = 5;
+}
+
+// Any represents a type-prefixed message for polymorphic encoding
+// Used for encoding messages in transactions
+message Any {
+  // TypeUrl is the message type identifier
+  // Format: /punnet.MODULE.v1.MessageType
+  // Example: /punnet.bank.v1.MsgSend
+  string type_url = 1;
+
+  // Value is the serialized message bytes
+  bytes value = 2;
+}
+
+// ValidatorUpdate represents a validator power update for consensus
+message ValidatorUpdate {
+  // PubKey is the validator's Ed25519 public key (32 bytes)
+  bytes pub_key = 1;
+
+  // Power is the validator's voting power
+  // Power = 0 means remove validator from active set
+  int64 power = 2;
+}
+
+// BlockHeader contains block metadata
+message BlockHeader {
+  // Height is the block height
+  int64 height = 1;
+
+  // Time is the block timestamp (Unix nanoseconds)
+  int64 time = 2;
+
+  // AppHash is the application state hash from previous block
+  bytes app_hash = 3;
+
+  // ProposerAddress is the validator that proposed this block
+  bytes proposer_address = 4;
+}
+
+// TxResult represents the result of transaction execution
+message TxResult {
+  // Code is the result code (0 = success, non-zero = error)
+  uint32 code = 1;
+
+  // Data is optional result data
+  bytes data = 2;
+
+  // Log is a human-readable log message
+  string log = 3;
+
+  // GasUsed is the amount of gas consumed
+  uint64 gas_used = 4;
+
+  // Events are structured events emitted during execution
+  repeated Event events = 5;
+}
+
+// Event represents a structured event emitted during execution
+message Event {
+  // Type is the event type
+  string type = 1;
+
+  // Attributes are key-value pairs for the event
+  repeated EventAttribute attributes = 2;
+}
+
+// EventAttribute represents a key-value pair in an event
+message EventAttribute {
+  // Key is the attribute key
+  string key = 1;
+
+  // Value is the attribute value
+  string value = 2;
+}
+
+// QueryResult represents the result of a query
+message QueryResult {
+  // Code is the result code (0 = success, non-zero = error)
+  uint32 code = 1;
+
+  // Data is the query result data
+  bytes data = 2;
+
+  // Log is a human-readable log message
+  string log = 3;
+
+  // Height is the block height at which the query was executed
+  int64 height = 4;
+}
+
+// CommitResult represents the result of state commitment
+message CommitResult {
+  // AppHash is the merkle root of the application state
+  bytes app_hash = 1;
+
+  // Height is the committed block height
+  int64 height = 2;
+}
+
+// EndBlockResult represents the result of end block processing
+message EndBlockResult {
+  // ValidatorUpdates are changes to the validator set
+  repeated ValidatorUpdate validator_updates = 1;
+
+  // Events are events emitted during end block
+  repeated Event events = 2;
+}
