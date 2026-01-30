@@ -96,12 +96,20 @@ func (a Authority) ValidateBasic() error {
 		return fmt.Errorf("%w: threshold cannot be zero", ErrInvalidAuthority)
 	}
 
-	// Calculate total possible weight
+	// Calculate total possible weight with overflow protection
 	var totalWeight uint64
 	for _, weight := range a.KeyWeights {
+		// Check for overflow before adding
+		if totalWeight > ^uint64(0)-weight {
+			return fmt.Errorf("%w: total weight overflow", ErrInvalidAuthority)
+		}
 		totalWeight += weight
 	}
 	for _, weight := range a.AccountWeights {
+		// Check for overflow before adding
+		if totalWeight > ^uint64(0)-weight {
+			return fmt.Errorf("%w: total weight overflow", ErrInvalidAuthority)
+		}
 		totalWeight += weight
 	}
 

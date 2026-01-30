@@ -137,33 +137,50 @@ func (m *BankModule) handleMultiSend(ctx *runtime.Context, msg types.Message) ([
 		}
 	}
 
-	// Create transfer effects for each input-output pair
+	// Create transfer effects for each input->output combination
+	// Note: This is a simplified implementation. A full implementation would need to
+	// properly map inputs to outputs, but for now we just transfer from each input
+	// to the first output that needs those coins.
 	var transferEffects []effects.Effect
 
-	// First subtract from all inputs
-	for _, input := range multiSendMsg.Inputs {
-		for _, coin := range input.Coins {
-			// Create a write effect for balance subtraction
-			transferEffects = append(transferEffects,
-				effects.WriteEffect[uint64]{
-					Store:    "balance_sub",
-					StoreKey: []byte(fmt.Sprintf("%s/%s", input.Address, coin.Denom)),
-					Value:    coin.Amount,
-				},
-			)
+	// Build a map of total outputs needed per account and denom
+	outputNeeds := make(map[string]map[string]uint64) // account -> denom -> amount
+	for _, output := range multiSendMsg.Outputs {
+		if outputNeeds[string(output.Address)] == nil {
+			outputNeeds[string(output.Address)] = make(map[string]uint64)
+		}
+		for _, coin := range output.Coins {
+			outputNeeds[string(output.Address)][coin.Denom] += coin.Amount
 		}
 	}
 
-	// Then add to all outputs
-	for _, output := range multiSendMsg.Outputs {
-		for _, coin := range output.Coins {
-			transferEffects = append(transferEffects,
-				effects.WriteEffect[uint64]{
-					Store:    "balance_add",
-					StoreKey: []byte(fmt.Sprintf("%s/%s", output.Address, coin.Denom)),
-					Value:    coin.Amount,
-				},
-			)
+	// Create transfers from inputs to outputs
+	for _, input := range multiSendMsg.Inputs {
+		for _, coin := range input.Coins {
+			// Find outputs that need this denomination and transfer to them
+			remaining := coin.Amount
+			for acct, denoms := range outputNeeds {
+				if needed, ok := denoms[coin.Denom]; ok && needed > 0 {
+					// Transfer what we can
+					toTransfer := remaining
+					if toTransfer > needed {
+						toTransfer = needed
+					}
+
+					transferEffects = append(transferEffects, effects.TransferEffect{
+						From:   input.Address,
+						To:     types.AccountName(acct),
+						Amount: types.Coins{{Denom: coin.Denom, Amount: toTransfer}},
+					})
+
+					outputNeeds[acct][coin.Denom] -= toTransfer
+					remaining -= toTransfer
+
+					if remaining == 0 {
+						break
+					}
+				}
+			}
 		}
 	}
 

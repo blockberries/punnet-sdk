@@ -168,18 +168,21 @@ func (m *StakingModule) handleDelegate(ctx *runtime.Context, msg types.Message) 
 		delegation = store.NewDelegation(delegateMsg.Delegator, delegateMsg.Validator, delegateMsg.Amount.Amount)
 	}
 
-	// Return effects: subtract balance and update delegation
+	// Return effects: transfer tokens to staking pool and update delegation
 	return []effects.Effect{
-		effects.WriteEffect[uint64]{
-			Store:    "balance_sub",
-			StoreKey: []byte(fmt.Sprintf("%s/%s", delegateMsg.Delegator, delegateMsg.Amount.Denom)),
-			Value:    delegateMsg.Amount.Amount,
+		// Transfer tokens from delegator to staking pool
+		effects.TransferEffect{
+			From:   delegateMsg.Delegator,
+			To:     types.AccountName("staking.pool"),
+			Amount: types.Coins{delegateMsg.Amount},
 		},
+		// Record the delegation
 		effects.WriteEffect[store.Delegation]{
 			Store:    "delegation",
 			StoreKey: store.DelegationKey(delegateMsg.Delegator, delegateMsg.Validator),
 			Value:    delegation,
 		},
+		// Emit event
 		effects.NewEventEffect("staking.delegated", map[string][]byte{
 			"delegator": []byte(delegateMsg.Delegator),
 			"validator": []byte(hex.EncodeToString(delegateMsg.Validator)),
@@ -247,14 +250,17 @@ func (m *StakingModule) handleUndelegate(ctx *runtime.Context, msg types.Message
 		}
 	}
 
-	// Return effects: add balance back and update/delete delegation
+	// Return effects: transfer tokens back from staking pool and update/delete delegation
 	return []effects.Effect{
-		effects.WriteEffect[uint64]{
-			Store:    "balance_add",
-			StoreKey: []byte(fmt.Sprintf("%s/%s", undelegateMsg.Delegator, undelegateMsg.Amount.Denom)),
-			Value:    undelegateMsg.Amount.Amount,
+		// Transfer tokens from staking pool back to delegator
+		effects.TransferEffect{
+			From:   types.AccountName("staking.pool"),
+			To:     undelegateMsg.Delegator,
+			Amount: types.Coins{undelegateMsg.Amount},
 		},
+		// Update or delete delegation record
 		delegationEffect,
+		// Emit event
 		effects.NewEventEffect("staking.undelegated", map[string][]byte{
 			"delegator": []byte(undelegateMsg.Delegator),
 			"validator": []byte(hex.EncodeToString(undelegateMsg.Validator)),
