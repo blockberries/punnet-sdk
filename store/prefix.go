@@ -264,7 +264,13 @@ type prefixIterator struct {
 }
 
 // newPrefixIterator creates a new prefix iterator
+// This is an internal constructor - it panics if inputs are invalid
 func newPrefixIterator(parent RawIterator, prefix []byte) *prefixIterator {
+	if parent == nil {
+		panic("newPrefixIterator: parent cannot be nil")
+	}
+
+	// Note: prefix can be nil/empty for iteration over entire store
 	return &prefixIterator{
 		parent: parent,
 		prefix: prefix,

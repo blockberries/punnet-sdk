@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -325,9 +326,17 @@ func (s *CachedObjectStore[T]) Flush(ctx context.Context) error {
 	// Get all dirty entries
 	dirty := s.cache.GetDirtyEntries()
 
-	// Write to backing store
+	// Sort keys for deterministic iteration (required for blockchain consensus)
+	sortedKeys := make([]string, 0, len(dirty))
+	for key := range dirty {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Strings(sortedKeys)
+
+	// Write to backing store in deterministic order
 	flushedKeys := make([]string, 0, len(dirty))
-	for keyStr, entry := range dirty {
+	for _, keyStr := range sortedKeys {
+		entry := dirty[keyStr]
 		key := []byte(keyStr)
 
 		if entry.Deleted {
@@ -390,7 +399,15 @@ type cachedIterator[T any] struct {
 }
 
 // newCachedIterator creates a new cached iterator
+// This is an internal constructor - it panics if inputs are invalid
 func newCachedIterator[T any](rawIter RawIterator, serializer Serializer[T], reverse bool) *cachedIterator[T] {
+	if rawIter == nil {
+		panic("newCachedIterator: rawIter cannot be nil")
+	}
+	if serializer == nil {
+		panic("newCachedIterator: serializer cannot be nil")
+	}
+
 	return &cachedIterator[T]{
 		rawIter:    rawIter,
 		serializer: serializer,

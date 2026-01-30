@@ -154,13 +154,16 @@ func (ms *MemoryStore) iterator(start, end []byte, reverse bool) (RawIterator, e
 		}
 	}
 
-	// Copy data for iterator
+	// Copy data for iterator with defensive copies
 	items := make([]kvPair, len(keys))
 	for i, key := range keys {
 		value := ms.data[key]
+		// Create defensive copy of value to prevent external mutation
+		valueCopy := make([]byte, len(value))
+		copy(valueCopy, value)
 		items[i] = kvPair{
 			key:   []byte(key),
-			value: value,
+			value: valueCopy,
 		}
 	}
 

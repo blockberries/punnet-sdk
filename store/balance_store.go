@@ -150,10 +150,8 @@ func (bs *BalanceStore) AccountIterator(ctx context.Context, account types.Accou
 	// Create prefix for account
 	prefix := []byte(fmt.Sprintf("%s/", account))
 
-	// Calculate end boundary
-	end := make([]byte, len(prefix))
-	copy(end, prefix)
-	end[len(end)-1]++
+	// Calculate end boundary - handles 0xFF overflow correctly
+	end := prefixBound(prefix)
 
 	return bs.store.Iterator(ctx, prefix, end)
 }
@@ -244,6 +242,9 @@ func (bs *BalanceStore) SubAmount(ctx context.Context, account types.AccountName
 }
 
 // Transfer transfers amount from one account to another
+// NOTE: This is not fully atomic. In concurrent scenarios, interleaved transfers
+// on the same accounts can cause lost updates. The runtime layer must ensure
+// that conflicting transfers are serialized via the effect system's dependency graph.
 func (bs *BalanceStore) Transfer(ctx context.Context, from, to types.AccountName, denom string, amount uint64) error {
 	if bs == nil || bs.store == nil {
 		return ErrStoreNil
@@ -253,16 +254,28 @@ func (bs *BalanceStore) Transfer(ctx context.Context, from, to types.AccountName
 		return nil
 	}
 
+	// Validate sender has sufficient balance before making changes
+	fromBalance, err := bs.Get(ctx, from, denom)
+	if err != nil {
+		return fmt.Errorf("failed to get sender balance: %w", err)
+	}
+	if fromBalance.Amount < amount {
+		return fmt.Errorf("insufficient balance: has %d, needs %d", fromBalance.Amount, amount)
+	}
+
 	// Subtract from sender
 	if err := bs.SubAmount(ctx, from, denom, amount); err != nil {
-		return err
+		return fmt.Errorf("failed to subtract from sender: %w", err)
 	}
 
 	// Add to receiver
 	if err := bs.AddAmount(ctx, to, denom, amount); err != nil {
-		// Rollback sender subtraction
-		_ = bs.AddAmount(ctx, from, denom, amount)
-		return err
+		// Attempt to rollback sender subtraction
+		if rollbackErr := bs.AddAmount(ctx, from, denom, amount); rollbackErr != nil {
+			// Rollback failed - this is a critical state inconsistency
+			return fmt.Errorf("transfer failed and rollback failed: original error: %w, rollback error: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("failed to add to receiver (rolled back): %w", err)
 	}
 
 	return nil

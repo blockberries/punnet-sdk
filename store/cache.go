@@ -205,7 +205,10 @@ func (c *Cache[T]) GetDirtyEntries() map[string]CacheEntry[T] {
 	for key, elem := range c.items {
 		item := elem.Value.(*cacheItem[T])
 		if item.entry.Dirty {
-			// Create a defensive copy of the entry
+			// NOTE: This creates a shallow copy of CacheEntry[T].
+			// If T contains slices, maps, or pointers, the caller must not mutate the Value field.
+			// Typed stores (AccountStore, BalanceStore, ValidatorStore) are responsible for
+			// implementing proper defensive copying for their specific types.
 			dirty[key] = CacheEntry[T]{
 				Value:   item.entry.Value,
 				Dirty:   item.entry.Dirty,
