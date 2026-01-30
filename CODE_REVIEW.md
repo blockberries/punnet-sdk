@@ -95,8 +95,28 @@ Per CLAUDE.md, all implementations must:
 | Parallel speedup | 4-8x |
 | Cache hit rate | > 95% |
 
+## Skill Improvements
+
+### 2026-01-30 - Bug Iteration Workflow Enhancements
+
+**Improvements Made:**
+1. **Configuration checks expanded**: Added specific items to check (syntax errors, typos, missing fields, version constraints, formatting)
+2. **Agent specializations clarified**: Defined 5 specific agent types (concurrency, security, performance, API, resource)
+3. **Bug patterns organized by category**: Grouped 60+ patterns into 8 categories for easier reference
+4. **False positive patterns organized**: Grouped 25+ patterns into 9 categories for clarity
+5. **Pre-implementation guidance**: Added specific handling for projects without implementation
+6. **Dependency bumping process**: Added steps for checking and updating dependencies
+7. **Skill reload clarification**: Documented that changes take effect automatically
+
+**Rationale:**
+The original skill was comprehensive but the extensive lists of patterns (130+ lines) were difficult to navigate. Organizing by category makes it easier to:
+- Ensure complete coverage during reviews
+- Train agents with specific focus areas
+- Avoid redundant checks across agents
+- Quickly identify which patterns apply to specific issues
+
 ## Review History
 
 | Date | Reviewer | Findings | Status |
 |------|----------|----------|--------|
-| 2026-01-30 | Code Review Agent | Pre-implementation state, 1 configuration issue | Documented |
+| 2026-01-30 | Code Review Agent | Pre-implementation state, 1 configuration issue | Fixed |
