@@ -78,6 +78,10 @@ func (s *Scheduler) Schedule() ([]Batch, error) {
 // findReadyNodes finds all nodes that are ready to execute
 // A node is ready if all its dependencies have been scheduled
 func (s *Scheduler) findReadyNodes(scheduled map[int]bool) []int {
+	if s == nil || s.graph == nil {
+		return nil
+	}
+
 	ready := make([]int, 0)
 
 	for i, node := range s.graph.Nodes {

@@ -100,6 +100,9 @@ func NewCollector() *Collector {
 
 // Add adds an effect to the collector
 func (c *Collector) Add(effect Effect) error {
+	if c == nil {
+		return fmt.Errorf("collector is nil")
+	}
 	if effect == nil {
 		return fmt.Errorf("cannot add nil effect")
 	}
@@ -114,6 +117,9 @@ func (c *Collector) Add(effect Effect) error {
 
 // AddMultiple adds multiple effects to the collector
 func (c *Collector) AddMultiple(effects []Effect) error {
+	if c == nil {
+		return fmt.Errorf("collector is nil")
+	}
 	for i, effect := range effects {
 		if err := c.Add(effect); err != nil {
 			return fmt.Errorf("effect %d: %w", i, err)
@@ -124,6 +130,9 @@ func (c *Collector) AddMultiple(effects []Effect) error {
 
 // Collect returns all collected effects and clears the collector
 func (c *Collector) Collect() []Effect {
+	if c == nil {
+		return nil
+	}
 	result := c.effects
 	c.effects = make([]Effect, 0)
 	return result
@@ -131,11 +140,17 @@ func (c *Collector) Collect() []Effect {
 
 // Count returns the number of collected effects
 func (c *Collector) Count() int {
+	if c == nil {
+		return 0
+	}
 	return len(c.effects)
 }
 
 // Clear clears all collected effects
 func (c *Collector) Clear() {
+	if c == nil {
+		return
+	}
 	c.effects = make([]Effect, 0)
 }
 
@@ -184,6 +199,12 @@ type Conflict struct {
 
 // Error returns the error message for the conflict
 func (c *Conflict) Error() string {
+	if c == nil {
+		return "nil conflict"
+	}
+	if c.Effect1 == nil || c.Effect2 == nil {
+		return fmt.Sprintf("%s conflict on key %x with nil effect", c.Type, c.Key)
+	}
 	return fmt.Sprintf("%s conflict on key %x between %s and %s",
 		c.Type, c.Key, c.Effect1.Type(), c.Effect2.Type())
 }

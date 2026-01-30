@@ -71,15 +71,18 @@ func (r *ExecutionResult) GetEvents() []Event {
 }
 
 // Executor executes effects against a store
+// Executor applies effects to state stores.
+//
+// Thread Safety: Executor is safe for concurrent use. The Execute() and ExecuteParallel()
+// methods can be called concurrently. However, the Store and BalanceStore implementations
+// provided to NewExecutor MUST be thread-safe, as they will be accessed concurrently
+// during parallel effect execution.
 type Executor struct {
-	// store is the underlying state store
+	// store is the underlying state store (must be thread-safe)
 	store Store
 
-	// balanceStore provides balance operations
+	// balanceStore provides balance operations (must be thread-safe)
 	balanceStore BalanceStore
-
-	// mu protects concurrent access
-	mu sync.RWMutex
 }
 
 // BalanceStore provides balance-specific operations
@@ -164,9 +167,6 @@ func (e *Executor) executeEffect(effect Effect, result *ExecutionResult) error {
 
 // executeRead executes a read effect
 func (e *Executor) executeRead(effect Effect) error {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
 	key := effect.Key()
 	if len(key) == 0 {
 		return fmt.Errorf("read effect has empty key")
@@ -183,9 +183,6 @@ func (e *Executor) executeRead(effect Effect) error {
 
 // executeWrite executes a write effect
 func (e *Executor) executeWrite(effect Effect) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	key := effect.Key()
 	if len(key) == 0 {
 		return fmt.Errorf("write effect has empty key")
@@ -199,9 +196,6 @@ func (e *Executor) executeWrite(effect Effect) error {
 
 // executeDelete executes a delete effect
 func (e *Executor) executeDelete(effect Effect) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	key := effect.Key()
 	if len(key) == 0 {
 		return fmt.Errorf("delete effect has empty key")
@@ -212,9 +206,7 @@ func (e *Executor) executeDelete(effect Effect) error {
 
 // executeTransfer executes a transfer effect
 func (e *Executor) executeTransfer(effect Effect) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	
 	// Type assert to get transfer details
 	transfer, ok := effect.(TransferEffect)
 	if !ok {

@@ -52,6 +52,12 @@ func (e ReadEffect[T]) Key() []byte {
 }
 
 // fullKey returns the full key including store prefix
+// Creates defensive copy to prevent slice aliasing
 func (e ReadEffect[T]) fullKey() []byte {
-	return append([]byte(e.Store+"/"), e.StoreKey...)
+	prefix := []byte(e.Store + "/")
+	// Create new slice with exact capacity to prevent aliasing
+	result := make([]byte, len(prefix)+len(e.StoreKey))
+	copy(result, prefix)
+	copy(result[len(prefix):], e.StoreKey)
+	return result
 }

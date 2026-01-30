@@ -89,6 +89,10 @@ func NewGraph(effects []Effect) (*Graph, error) {
 
 // buildDependencies constructs the dependency edges between nodes
 func (g *Graph) buildDependencies() error {
+	if g == nil {
+		return fmt.Errorf("graph is nil")
+	}
+
 	// For each node, find dependencies based on conflicts
 	for i := 0; i < len(g.Nodes); i++ {
 		node := g.Nodes[i]
