@@ -103,8 +103,15 @@ func (tx *Transaction) Hash() []byte {
 	return h.Sum(nil)
 }
 
-// GetSignBytes returns the bytes to sign for this transaction
-// This is used for signature verification
+// GetSignBytes returns the bytes to sign for this transaction.
+//
+// Deprecated: This method uses a non-standard serialization format that does not
+// include chainID for replay protection. Use ToSignDoc().GetSignBytes() instead
+// for SignDoc-based verification with proper cross-chain replay attack prevention.
+//
+// TODO(follow-up): Remove this method or rename to LegacyGetSignBytes() once all
+// callers are migrated to SignDoc-based verification. See PR #25 review from
+// Conductor for details.
 func (tx *Transaction) GetSignBytes() []byte {
 	// TODO: Use proper canonical serialization (Cramberry) for production
 	// For now, use a simple concatenation
@@ -184,13 +191,28 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 // POSTCONDITION: Authorization field is NOT included (it contains the signatures being produced)
 //
 // INVARIANT: Two calls to ToSignDoc with same parameters return equal SignDocs.
+//
+// TODO(follow-up): The current message serialization only includes signers, not full message data.
+// This is architecturally problematic because:
+// 1. Information loss - actual message content isn't in the SignDoc
+// 2. Future compatibility - when messages have fields beyond signers, this breaks
+//
+// Recommended fix: Define a SignDocSerializable interface:
+//
+//	type SignDocSerializable interface {
+//	    SignDocData() (json.RawMessage, error)
+//	}
+//
+// And implement it on Message types or extract full message data.
+// See PR #25 review from Conductor for details.
 func (tx *Transaction) ToSignDoc(chainID string, accountSequence uint64) *SignDoc {
 	signDoc := NewSignDoc(chainID, accountSequence, string(tx.Account), tx.Nonce, tx.Memo)
 
 	// Convert messages to SignDoc format
 	for _, msg := range tx.Messages {
-		// For now, we use the message type as data since Message interface
-		// doesn't expose raw data. In production, this would use proper serialization.
+		// TODO(follow-up): This only serializes signers. Full message content should be
+		// included for proper signature binding. The json.Marshal error is silently
+		// ignored here which is not ideal.
 		msgData, _ := json.Marshal(map[string]interface{}{
 			"signers": msg.GetSigners(),
 		})

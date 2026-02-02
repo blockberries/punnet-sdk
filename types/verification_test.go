@@ -312,28 +312,30 @@ func TestSignature_ValidateBasic_Ed25519(t *testing.T) {
 }
 
 func TestSignature_ValidateBasic_Secp256k1(t *testing.T) {
+	// secp256k1 is NOT production-ready. It should fail validation with ErrUnsupportedAlgorithm.
+	// This test ensures we properly reject secp256k1 until it's fully implemented and tested.
 	tests := []struct {
 		name      string
 		sig       Signature
 		expectErr bool
 	}{
 		{
-			name: "valid secp256k1 signature",
+			name: "secp256k1 rejected (not production-ready)",
 			sig: Signature{
 				Algorithm: AlgorithmSecp256k1,
-				PubKey:    make([]byte, 33), // Compressed pubkey
+				PubKey:    make([]byte, 33), // Correct size, but algorithm is rejected
 				Signature: make([]byte, 64),
 			},
-			expectErr: false,
+			expectErr: true, // Should fail because algorithm is not production-ready
 		},
 		{
-			name: "invalid pubkey length",
+			name: "secp256r1 rejected (not production-ready)",
 			sig: Signature{
-				Algorithm: AlgorithmSecp256k1,
-				PubKey:    make([]byte, 32), // Should be 33
+				Algorithm: AlgorithmSecp256r1,
+				PubKey:    make([]byte, 33),
 				Signature: make([]byte, 64),
 			},
-			expectErr: true,
+			expectErr: true, // Should fail because algorithm is not production-ready
 		},
 	}
 
@@ -342,6 +344,7 @@ func TestSignature_ValidateBasic_Secp256k1(t *testing.T) {
 			err := tt.sig.ValidateBasic()
 			if tt.expectErr {
 				assert.Error(t, err)
+				assert.ErrorIs(t, err, ErrUnsupportedAlgorithm)
 			} else {
 				assert.NoError(t, err)
 			}
@@ -379,19 +382,30 @@ func TestSignature_Verify_Ed25519(t *testing.T) {
 }
 
 func TestIsValidAlgorithm(t *testing.T) {
+	// Ed25519 is production-ready
 	assert.True(t, IsValidAlgorithm(AlgorithmEd25519))
-	assert.True(t, IsValidAlgorithm(AlgorithmSecp256k1))
-	assert.True(t, IsValidAlgorithm(AlgorithmSecp256r1))
+
+	// Empty string defaults to Ed25519 for backwards compatibility
+	assert.True(t, IsValidAlgorithm(""))
+
+	// secp256k1 and secp256r1 are NOT production-ready yet
+	// They are excluded from validation until properly implemented and tested
+	assert.False(t, IsValidAlgorithm(AlgorithmSecp256k1), "secp256k1 should not be valid until implemented")
+	assert.False(t, IsValidAlgorithm(AlgorithmSecp256r1), "secp256r1 should not be valid until implemented")
+
+	// Unknown algorithms should be rejected
 	assert.False(t, IsValidAlgorithm("unknown"))
-	assert.False(t, IsValidAlgorithm(""))
 }
 
 func TestValidAlgorithms(t *testing.T) {
 	algos := ValidAlgorithms()
-	assert.Len(t, algos, 3)
+	// Only Ed25519 is production-ready
+	assert.Len(t, algos, 1)
 	assert.Contains(t, algos, AlgorithmEd25519)
-	assert.Contains(t, algos, AlgorithmSecp256k1)
-	assert.Contains(t, algos, AlgorithmSecp256r1)
+
+	// secp256k1 and secp256r1 should NOT be in the valid list until implemented
+	assert.NotContains(t, algos, AlgorithmSecp256k1, "secp256k1 should not be listed as valid")
+	assert.NotContains(t, algos, AlgorithmSecp256r1, "secp256r1 should not be listed as valid")
 }
 
 // TestSignDocReconstructionSecurity tests that SignDoc reconstruction is secure.

@@ -132,6 +132,47 @@ func TestSignDoc_ValidateBasic(t *testing.T) {
 			expectErr: true,
 			errMsg:    "empty type",
 		},
+		{
+			name: "too many messages (DoS protection)",
+			signDoc: func() *SignDoc {
+				sd := &SignDoc{
+					Version: SignDocVersion,
+					ChainID: "test",
+					Account: "alice",
+				}
+				// Create more messages than allowed
+				for i := 0; i <= MaxMessagesPerSignDoc; i++ {
+					sd.Messages = append(sd.Messages, SignDocMessage{
+						Type: "/msg.Type",
+						Data: json.RawMessage(`{}`),
+					})
+				}
+				return sd
+			}(),
+			expectErr: true,
+			errMsg:    "too many messages",
+		},
+		{
+			name: "message data too large (DoS protection)",
+			signDoc: func() *SignDoc {
+				// Create message data larger than MaxMessageDataSize
+				largeData := make([]byte, MaxMessageDataSize+1)
+				for i := range largeData {
+					largeData[i] = 'x'
+				}
+				return &SignDoc{
+					Version: SignDocVersion,
+					ChainID: "test",
+					Account: "alice",
+					Messages: []SignDocMessage{{
+						Type: "/msg.Type",
+						Data: json.RawMessage(largeData),
+					}},
+				}
+			}(),
+			expectErr: true,
+			errMsg:    "data too large",
+		},
 	}
 
 	for _, tt := range tests {

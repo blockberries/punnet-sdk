@@ -12,6 +12,16 @@ import (
 // Changing this version invalidates all existing signatures.
 const SignDocVersion = "1"
 
+// MaxMessagesPerSignDoc limits the number of messages in a SignDoc.
+// SECURITY: Prevents DoS attacks via memory/CPU exhaustion during serialization
+// and iteration over large message arrays.
+const MaxMessagesPerSignDoc = 256
+
+// MaxMessageDataSize limits the size of each message's data field in bytes.
+// SECURITY: Prevents memory exhaustion from arbitrarily large message payloads.
+// 64KB per message is generous for most use cases while preventing abuse.
+const MaxMessageDataSize = 64 * 1024 // 64KB
+
 // SignDoc represents the canonical document that is signed for transaction authorization.
 //
 // INVARIANT: Two SignDocs with identical field values MUST produce identical JSON bytes.
@@ -106,6 +116,10 @@ func (sd *SignDoc) GetSignBytes() ([]byte, error) {
 }
 
 // ValidateBasic performs stateless validation of the SignDoc.
+//
+// SECURITY: This validation includes bounds checking to prevent DoS attacks:
+// - Maximum message count: MaxMessagesPerSignDoc (256)
+// - Maximum message data size: MaxMessageDataSize (64KB)
 func (sd *SignDoc) ValidateBasic() error {
 	if sd.Version != SignDocVersion {
 		return fmt.Errorf("%w: unsupported SignDoc version %q, expected %q",
@@ -124,10 +138,22 @@ func (sd *SignDoc) ValidateBasic() error {
 		return fmt.Errorf("%w: SignDoc must contain at least one message", ErrSignDocMismatch)
 	}
 
-	// Validate each message has a type
+	// SECURITY: Limit message count to prevent DoS via memory/CPU exhaustion
+	if len(sd.Messages) > MaxMessagesPerSignDoc {
+		return fmt.Errorf("%w: too many messages (%d > %d)",
+			ErrSignDocMismatch, len(sd.Messages), MaxMessagesPerSignDoc)
+	}
+
+	// Validate each message
 	for i, msg := range sd.Messages {
 		if msg.Type == "" {
 			return fmt.Errorf("%w: message %d has empty type", ErrSignDocMismatch, i)
+		}
+
+		// SECURITY: Limit message data size to prevent memory exhaustion
+		if len(msg.Data) > MaxMessageDataSize {
+			return fmt.Errorf("%w: message %d data too large (%d > %d)",
+				ErrSignDocMismatch, i, len(msg.Data), MaxMessageDataSize)
 		}
 	}
 
