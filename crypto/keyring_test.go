@@ -430,3 +430,229 @@ func BenchmarkMemoryStorePut(b *testing.B) {
 		store.Put(entry, true) // Overwrite mode
 	}
 }
+
+// Security tests
+
+func TestKeyringKeyNameValidation(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"", true},                           // empty
+		{"valid-key", false},                 // valid
+		{"key_with_underscore", false},       // valid
+		{"key.with.dots", false},             // valid
+		{"../etc/passwd", true},              // path traversal
+		{"..\\windows\\system32", true},      // windows path traversal
+		{"/absolute/path", true},             // absolute path
+		{"key\x00null", true},                // null byte
+		{"key\nwith\nnewlines", true},        // control chars
+		{string(make([]byte, 300)), true},    // too long
+	}
+
+	for _, tt := range tests {
+		_, err := kr.NewKey(tt.name, AlgorithmEd25519)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("NewKey(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+		}
+		// Clean up if key was created
+		if err == nil {
+			kr.DeleteKey(tt.name)
+		}
+	}
+}
+
+func TestKeyringImportKeyNameValidation(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Generate a valid key
+	_, priv, _ := ed25519.GenerateKey(nil)
+
+	// Empty name should fail
+	_, err := kr.ImportKey("", priv, AlgorithmEd25519)
+	if err == nil {
+		t.Error("ImportKey should reject empty name")
+	}
+
+	// Path traversal should fail
+	_, err = kr.ImportKey("../malicious", priv, AlgorithmEd25519)
+	if err == nil {
+		t.Error("ImportKey should reject path traversal")
+	}
+}
+
+func TestKeyringImportKeyAlgorithmValidation(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	_, priv, _ := ed25519.GenerateKey(nil)
+
+	// Unimplemented algorithm should fail fast
+	_, err := kr.ImportKey("test", priv, AlgorithmSecp256k1)
+	if err == nil {
+		t.Error("ImportKey should reject unimplemented algorithm")
+	}
+}
+
+func TestKeyringSignDataLimit(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	_, err := kr.NewKey("test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Data at the limit should succeed
+	largeData := make([]byte, MaxSignDataLength)
+	_, err = kr.Sign("test", largeData)
+	if err != nil {
+		t.Errorf("Sign should accept data at limit: %v", err)
+	}
+
+	// Data over the limit should fail
+	tooLargeData := make([]byte, MaxSignDataLength+1)
+	_, err = kr.Sign("test", tooLargeData)
+	if err != ErrDataTooLarge {
+		t.Errorf("Sign should reject data over limit, got: %v", err)
+	}
+}
+
+func TestKeyringNilInputs(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Sign with nil data should work (Ed25519 handles it)
+	_, err := kr.NewKey("test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	_, err = kr.Sign("test", nil)
+	if err != nil {
+		t.Errorf("Sign(nil) should work: %v", err)
+	}
+
+	// Import with nil should fail with ErrInvalidKey
+	_, err = kr.ImportKey("nil-key", nil, AlgorithmEd25519)
+	if err != ErrInvalidKey {
+		t.Errorf("ImportKey(nil) should return ErrInvalidKey, got: %v", err)
+	}
+}
+
+func TestKeyringConcurrentDeleteGet(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create initial keys
+	for i := 0; i < 10; i++ {
+		name := string(rune('a' + i))
+		if _, err := kr.NewKey(name, AlgorithmEd25519); err != nil {
+			t.Fatalf("NewKey %s failed: %v", name, err)
+		}
+	}
+
+	// Concurrent deletes and gets - should not panic
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		name := string(rune('a' + (i % 10)))
+		go func(n string) {
+			defer wg.Done()
+			kr.GetKey(n) // May succeed or fail, shouldn't panic
+		}(name)
+		go func(n string) {
+			defer wg.Done()
+			kr.DeleteKey(n) // May succeed or fail, shouldn't panic
+		}(name)
+	}
+	wg.Wait()
+}
+
+func TestKeyringCacheExactBoundary(t *testing.T) {
+	cacheSize := 5
+	store := NewMemoryStore()
+	kr := NewKeyring(store, WithCacheSize(cacheSize))
+
+	// Create exactly cacheSize keys
+	for i := 0; i < cacheSize; i++ {
+		name := string(rune('a' + i))
+		if _, err := kr.NewKey(name, AlgorithmEd25519); err != nil {
+			t.Fatalf("NewKey %s failed: %v", name, err)
+		}
+	}
+
+	// All should be accessible
+	for i := 0; i < cacheSize; i++ {
+		name := string(rune('a' + i))
+		if _, err := kr.GetKey(name); err != nil {
+			t.Errorf("GetKey %s failed: %v", name, err)
+		}
+	}
+
+	// Add one more - should evict oldest
+	if _, err := kr.NewKey("extra", AlgorithmEd25519); err != nil {
+		t.Fatalf("NewKey extra failed: %v", err)
+	}
+
+	// All keys including "a" should still be accessible (from store)
+	for i := 0; i < cacheSize; i++ {
+		name := string(rune('a' + i))
+		if _, err := kr.GetKey(name); err != nil {
+			t.Errorf("GetKey %s failed after eviction: %v", name, err)
+		}
+	}
+	if _, err := kr.GetKey("extra"); err != nil {
+		t.Errorf("GetKey extra failed: %v", err)
+	}
+}
+
+func TestZeroize(t *testing.T) {
+	data := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	Zeroize(data)
+	for i, b := range data {
+		if b != 0 {
+			t.Errorf("Zeroize failed at index %d: got %d, want 0", i, b)
+		}
+	}
+
+	// Empty slice should not panic
+	Zeroize(nil)
+	Zeroize([]byte{})
+}
+
+func TestPrivateKeyZeroize(t *testing.T) {
+	privKey, err := GeneratePrivateKey(AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey failed: %v", err)
+	}
+
+	// Get a reference to the bytes
+	keyBytes := privKey.Bytes()
+
+	// Verify key is not zero
+	allZero := true
+	for _, b := range keyBytes {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("Private key should not be all zeros initially")
+	}
+
+	// Zeroize
+	privKey.Zeroize()
+
+	// Verify key is now zero
+	for i, b := range keyBytes {
+		if b != 0 {
+			t.Errorf("Zeroize failed at index %d: got %d, want 0", i, b)
+		}
+	}
+}

@@ -7,6 +7,17 @@ import (
 	"fmt"
 )
 
+// Zeroize overwrites a byte slice with zeros.
+// Used to clear sensitive data (private keys) from memory.
+// Complexity: O(n) where n is slice length.
+// Note: Compiler may optimize this away; for production use consider
+// using crypto/subtle or runtime.KeepAlive to prevent optimization.
+func Zeroize(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // PublicKey represents a public key for signature verification.
 type PublicKey interface {
 	// Bytes returns the raw public key bytes.
@@ -47,6 +58,11 @@ type PrivateKey interface {
 	// Sign signs the given data.
 	// Complexity: O(n) where n is data length.
 	Sign(data []byte) ([]byte, error)
+
+	// Zeroize overwrites the private key bytes with zeros.
+	// Call this when done with the key to minimize exposure in memory.
+	// After calling Zeroize, the key is no longer usable.
+	Zeroize()
 }
 
 // ed25519PublicKey implements PublicKey for Ed25519.
@@ -121,6 +137,11 @@ func (k *ed25519PrivateKey) Sign(data []byte) ([]byte, error) {
 	return ed25519.Sign(k.key, data), nil
 }
 
+// Zeroize overwrites the private key with zeros.
+func (k *ed25519PrivateKey) Zeroize() {
+	Zeroize(k.key)
+}
+
 // GeneratePrivateKey generates a new private key for the given algorithm.
 // Complexity: O(1) for key generation, uses crypto/rand.
 func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
@@ -142,6 +163,7 @@ func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
 }
 
 // PrivateKeyFromBytes creates a private key from raw bytes.
+// The caller should zero the input data after this call returns if it's sensitive.
 // Complexity: O(n) where n is byte length for validation.
 func PrivateKeyFromBytes(algo Algorithm, data []byte) (PrivateKey, error) {
 	switch algo {

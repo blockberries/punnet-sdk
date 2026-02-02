@@ -2,16 +2,51 @@ package crypto
 
 import (
 	"errors"
+	"fmt"
 	"sync"
+)
+
+// Key name constraints.
+const (
+	// MaxKeyNameLength is the maximum allowed length for a key name.
+	// Prevents resource exhaustion attacks.
+	MaxKeyNameLength = 256
+
+	// MaxSignDataLength is the maximum allowed input length for Sign.
+	// Ed25519 handles any length, but we cap for consistency with future backends.
+	// 64MB should handle any reasonable signing use case.
+	MaxSignDataLength = 64 * 1024 * 1024
 )
 
 // Keyring error types.
 var (
-	ErrKeyNotFound     = errors.New("key not found")
-	ErrKeyExists       = errors.New("key already exists")
-	ErrInvalidPassword = errors.New("invalid password")
-	ErrInvalidKey      = errors.New("invalid key data")
+	ErrKeyNotFound      = errors.New("key not found")
+	ErrKeyExists        = errors.New("key already exists")
+	ErrInvalidPassword  = errors.New("invalid password")
+	ErrInvalidKey       = errors.New("invalid key data")
+	ErrInvalidKeyName   = errors.New("invalid key name")
+	ErrDataTooLarge     = errors.New("data exceeds maximum sign length")
 )
+
+// validateKeyName validates a key name for security.
+// Rejects empty names, overly long names, and names with dangerous characters.
+// Complexity: O(n) where n is name length.
+func validateKeyName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name cannot be empty", ErrInvalidKeyName)
+	}
+	if len(name) > MaxKeyNameLength {
+		return fmt.Errorf("%w: name too long (max %d characters)", ErrInvalidKeyName, MaxKeyNameLength)
+	}
+	// Reject path separators, control chars, null bytes.
+	// This prevents path traversal in file-based backends.
+	for _, r := range name {
+		if r < 32 || r == '/' || r == '\\' || r == 0 {
+			return fmt.Errorf("%w: name contains invalid characters", ErrInvalidKeyName)
+		}
+	}
+	return nil
+}
 
 // Keyring manages multiple signing keys.
 // All methods are thread-safe.
@@ -97,6 +132,11 @@ func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
 
 // NewKey generates a new key.
 func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
+	// Validate key name (prevents path traversal, injection attacks)
+	if err := validateKeyName(name); err != nil {
+		return nil, err
+	}
+
 	// Check if key already exists
 	exists, err := kr.store.Has(name)
 	if err != nil {
@@ -135,6 +175,16 @@ func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 
 // ImportKey imports an existing private key.
 func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algorithm) (Signer, error) {
+	// Validate key name (prevents path traversal, injection attacks)
+	if err := validateKeyName(name); err != nil {
+		return nil, err
+	}
+
+	// Fail fast for unimplemented algorithms
+	if algo != AlgorithmEd25519 {
+		return nil, fmt.Errorf("algorithm %s not yet implemented", algo)
+	}
+
 	// Check if key already exists
 	exists, err := kr.store.Has(name)
 	if err != nil {
@@ -173,11 +223,14 @@ func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algor
 
 // ExportKey exports a private key.
 // Password is reserved for future encrypted keystore support.
+// Note: Caller should zero the returned bytes when done with them.
 func (kr *defaultKeyring) ExportKey(name string, password string) ([]byte, error) {
 	entry, err := kr.store.Get(name)
 	if err != nil {
 		return nil, err
 	}
+	// Zero the entry's private key bytes after we've copied them
+	defer Zeroize(entry.PrivateKey)
 
 	// TODO: Implement decryption when encrypted keystores are supported
 	if entry.Encrypted {
@@ -191,6 +244,10 @@ func (kr *defaultKeyring) ExportKey(name string, password string) ([]byte, error
 }
 
 // GetKey retrieves a signer by name.
+// Note: Between releasing the read lock and acquiring the write lock in addToCache,
+// another goroutine may add the same key. This is handled correctly in addToCache
+// (becomes move-to-front), so correctness is preserved. This is a deliberate
+// trade-off: avoiding a single write lock on the hot path reduces lock contention.
 func (kr *defaultKeyring) GetKey(name string) (Signer, error) {
 	// Check cache first (hot path)
 	kr.mu.RLock()
@@ -200,11 +257,13 @@ func (kr *defaultKeyring) GetKey(name string) (Signer, error) {
 	}
 	kr.mu.RUnlock()
 
-	// Load from store
+	// Load from store (potential duplicate work if racing, but correctness preserved)
 	entry, err := kr.store.Get(name)
 	if err != nil {
 		return nil, err
 	}
+	// Zero the entry's private key bytes after we're done with them
+	defer Zeroize(entry.PrivateKey)
 
 	// Reconstruct signer
 	privKey, err := PrivateKeyFromBytes(entry.Algorithm, entry.PrivateKey)
@@ -241,7 +300,14 @@ func (kr *defaultKeyring) DeleteKey(name string) error {
 }
 
 // Sign signs data with the named key.
+// Validates data length to ensure compatibility with all backends.
+// Complexity: O(GetKey) + O(n) where n is data length.
 func (kr *defaultKeyring) Sign(name string, data []byte) ([]byte, error) {
+	// Bounds check for data length (future HSM backends may have limits)
+	if len(data) > MaxSignDataLength {
+		return nil, ErrDataTooLarge
+	}
+
 	signer, err := kr.GetKey(name)
 	if err != nil {
 		return nil, err

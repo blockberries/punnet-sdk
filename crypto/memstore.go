@@ -66,14 +66,18 @@ func (s *MemoryStore) Put(entry *KeyEntry, overwrite bool) error {
 }
 
 // Delete removes a key entry.
+// Zeros private key material before removal for security.
 func (s *MemoryStore) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.keys[name]; !exists {
+	entry, exists := s.keys[name]
+	if !exists {
 		return ErrKeyNotFound
 	}
 
+	// Zero private key bytes before deletion to minimize memory exposure
+	Zeroize(entry.PrivateKey)
 	delete(s.keys, name)
 	return nil
 }
@@ -110,9 +114,14 @@ func (s *MemoryStore) Len() int {
 }
 
 // Clear removes all keys.
+// Zeros private key material before removal for security.
 // Useful for testing.
 func (s *MemoryStore) Clear() {
 	s.mu.Lock()
+	// Zero all private keys before clearing
+	for _, entry := range s.keys {
+		Zeroize(entry.PrivateKey)
+	}
 	s.keys = make(map[string]*KeyEntry, 16)
 	s.mu.Unlock()
 }
