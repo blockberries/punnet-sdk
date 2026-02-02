@@ -1,6 +1,10 @@
 package crypto
 
-import "errors"
+import (
+	"errors"
+	"strings"
+	"unicode/utf8"
+)
 
 // KeyStore error types.
 var (
@@ -12,13 +16,47 @@ var (
 
 	// ErrKeyStoreIO is returned when an I/O error occurs during store operations.
 	ErrKeyStoreIO = errors.New("key store I/O error")
+
+	// ErrInvalidKeyName is returned when a key name fails validation.
+	ErrInvalidKeyName = errors.New("invalid key name")
+
+	// ErrInvalidEncryptionParams is returned when encryption parameters are invalid.
+	ErrInvalidEncryptionParams = errors.New("invalid encryption parameters")
+
+	// ErrInvalidAlgorithm is returned when an algorithm is not recognized.
+	ErrInvalidAlgorithm = errors.New("invalid algorithm")
+
+	// ErrKeyNameMismatch is returned when the name parameter differs from EncryptedKey.Name.
+	ErrKeyNameMismatch = errors.New("key name parameter does not match EncryptedKey.Name")
 )
+
+// Cryptographic parameter constants per NIST recommendations.
+const (
+	// MinSaltLength is the minimum salt length for PBKDF2 (NIST SP 800-132).
+	// 16 bytes (128 bits) provides sufficient entropy against rainbow tables.
+	MinSaltLength = 16
+
+	// AESGCMNonceLength is the required nonce length for AES-GCM.
+	// MUST be exactly 12 bytes (96 bits) per NIST SP 800-38D.
+	AESGCMNonceLength = 12
+
+	// MaxKeyNameLength prevents DoS via extremely long names.
+	// 256 bytes is sufficient for any reasonable key identifier.
+	MaxKeyNameLength = 256
+)
+
+// forbiddenKeyNameChars contains characters not allowed in key names.
+// Prevents path traversal and filesystem issues.
+const forbiddenKeyNameChars = "/\\:*?\"<>|.."
 
 // EncryptedKey represents a stored key that may be encrypted or plaintext.
 // For encrypted backends, PrivKeyData contains ciphertext encrypted with AES-GCM.
 // For plaintext backends (e.g., in-memory), PrivKeyData contains the raw key bytes.
 //
 // Memory layout optimized for cache efficiency: frequently accessed fields first.
+//
+// SECURITY: When finished with an EncryptedKey containing sensitive data,
+// call Wipe() to zero out private key material from memory.
 type EncryptedKey struct {
 	// Name is the unique identifier for this key.
 	Name string `json:"name"`
@@ -33,21 +71,147 @@ type EncryptedKey struct {
 	// PrivKeyData contains the private key data.
 	// For encrypted storage: AES-GCM ciphertext.
 	// For plaintext storage: raw private key bytes.
+	// SECURITY: Contains sensitive material. Call Wipe() when done.
 	PrivKeyData []byte `json:"priv_key_data"`
 
 	// Salt is the PBKDF2 salt used for key derivation.
 	// Nil for plaintext storage.
+	// MUST be at least MinSaltLength (16) bytes when present.
 	Salt []byte `json:"salt,omitempty"`
 
 	// Nonce is the AES-GCM nonce used for encryption.
 	// Nil for plaintext storage.
+	// MUST be exactly AESGCMNonceLength (12) bytes when present.
 	Nonce []byte `json:"nonce,omitempty"`
 }
 
 // IsEncrypted returns true if this key is stored with encryption.
+// Returns false for plaintext keys or keys with invalid encryption parameters.
+// Use ValidateEncryptionParams() for detailed validation.
 // Complexity: O(1)
 func (k *EncryptedKey) IsEncrypted() bool {
-	return len(k.Salt) > 0 && len(k.Nonce) > 0
+	return len(k.Salt) >= MinSaltLength && len(k.Nonce) == AESGCMNonceLength
+}
+
+// ValidateEncryptionParams checks that encryption parameters are valid.
+// Returns nil for valid plaintext keys (no Salt/Nonce) or valid encrypted keys.
+// Returns ErrInvalidEncryptionParams for malformed encryption metadata.
+//
+// Valid states:
+//   - Plaintext: Salt == nil && Nonce == nil
+//   - Encrypted: len(Salt) >= 16 && len(Nonce) == 12
+//
+// Complexity: O(1)
+func (k *EncryptedKey) ValidateEncryptionParams() error {
+	hasSalt := len(k.Salt) > 0
+	hasNonce := len(k.Nonce) > 0
+
+	// Plaintext: neither Salt nor Nonce
+	if !hasSalt && !hasNonce {
+		return nil
+	}
+
+	// Encrypted: must have both with correct lengths
+	if hasSalt && hasNonce {
+		if len(k.Salt) < MinSaltLength {
+			return ErrInvalidEncryptionParams
+		}
+		if len(k.Nonce) != AESGCMNonceLength {
+			return ErrInvalidEncryptionParams
+		}
+		return nil
+	}
+
+	// Partial: one present, one missing - invalid
+	return ErrInvalidEncryptionParams
+}
+
+// Validate performs comprehensive validation of the EncryptedKey.
+// Checks algorithm validity and encryption parameters.
+// Complexity: O(1)
+func (k *EncryptedKey) Validate() error {
+	if !k.Algorithm.IsValid() {
+		return ErrInvalidAlgorithm
+	}
+	return k.ValidateEncryptionParams()
+}
+
+// Wipe securely zeros all sensitive data in the EncryptedKey.
+// Call this when the key is no longer needed to minimize exposure
+// of private key material in memory.
+//
+// IMPORTANT: Go's garbage collector may have already copied this data
+// elsewhere in memory. This method zeros the current buffer but cannot
+// guarantee all copies are erased. For high-security applications,
+// consider using OS-level secure memory facilities.
+//
+// Complexity: O(n) where n = len(PrivKeyData) + len(Salt) + len(Nonce)
+func (k *EncryptedKey) Wipe() {
+	// Zero private key data
+	for i := range k.PrivKeyData {
+		k.PrivKeyData[i] = 0
+	}
+	// Zero salt
+	for i := range k.Salt {
+		k.Salt[i] = 0
+	}
+	// Zero nonce
+	for i := range k.Nonce {
+		k.Nonce[i] = 0
+	}
+}
+
+// SafeString returns a string representation suitable for logging.
+// Sensitive fields (PrivKeyData, Salt, Nonce) are redacted.
+// Complexity: O(1)
+func (k *EncryptedKey) SafeString() string {
+	encrypted := "plaintext"
+	if k.IsEncrypted() {
+		encrypted = "encrypted"
+	}
+	return "EncryptedKey{Name:" + k.Name + ", Algorithm:" + k.Algorithm.String() + ", Storage:" + encrypted + "}"
+}
+
+// ValidateKeyName checks that a key name is valid for storage.
+// Returns nil if valid, ErrInvalidKeyName if invalid.
+//
+// Validation rules:
+//   - MUST be non-empty
+//   - MUST be valid UTF-8
+//   - MUST NOT exceed MaxKeyNameLength (256) bytes
+//   - MUST NOT contain path traversal characters (/, \, ..)
+//   - MUST NOT contain filesystem-unsafe characters (:, *, ?, ", <, >, |)
+//
+// Complexity: O(n) where n = len(name)
+func ValidateKeyName(name string) error {
+	// Check empty
+	if name == "" {
+		return ErrInvalidKeyName
+	}
+
+	// Check length (prevents DoS via extremely long names)
+	if len(name) > MaxKeyNameLength {
+		return ErrInvalidKeyName
+	}
+
+	// Check valid UTF-8
+	if !utf8.ValidString(name) {
+		return ErrInvalidKeyName
+	}
+
+	// Check for path traversal sequences
+	if strings.Contains(name, "..") {
+		return ErrInvalidKeyName
+	}
+
+	// Check for forbidden characters
+	for _, c := range forbiddenKeyNameChars {
+		if strings.ContainsRune(name, c) {
+			return ErrInvalidKeyName
+		}
+	}
+
+	return nil
 }
 
 // KeyStore is the interface for key storage backends.
@@ -55,16 +219,27 @@ func (k *EncryptedKey) IsEncrypted() bool {
 // Implementations must be safe for concurrent use by multiple goroutines.
 // All operations should be atomic - partial writes must not corrupt state.
 //
+// INVARIANT: For all stored keys k, ValidateKeyName(k.Name) == nil
+//
 // Performance characteristics vary by implementation:
 //   - MemoryKeyStore: O(1) average for all operations
 //   - FileKeyStore: O(1) memory ops + O(n) disk I/O where n = key size
 //   - EncryptedKeyStore: adds O(key_derivation) for password-based encryption
 type KeyStore interface {
 	// Store saves a key to the store.
+	//
+	// REQUIREMENTS:
+	//   - name MUST be non-empty and pass ValidateKeyName()
+	//   - name MUST equal key.Name (prevents lookup/storage mismatch)
+	//   - key.Algorithm MUST be valid (pass Algorithm.IsValid())
+	//   - If key has encryption params, they MUST pass ValidateEncryptionParams()
+	//
+	// Returns ErrInvalidKeyName if name fails validation.
+	// Returns ErrKeyNameMismatch if name != key.Name.
+	// Returns ErrInvalidAlgorithm if algorithm is not recognized.
+	// Returns ErrInvalidEncryptionParams if encryption metadata is malformed.
 	// Returns ErrKeyStoreExists if a key with the same name already exists.
 	// Returns ErrKeyStoreIO if the underlying storage fails.
-	//
-	// Implementations should validate that the key name is non-empty.
 	Store(name string, key EncryptedKey) error
 
 	// Load retrieves a key from the store.
@@ -73,13 +248,21 @@ type KeyStore interface {
 	//
 	// The returned EncryptedKey may contain encrypted or plaintext data
 	// depending on the storage backend configuration.
+	//
+	// SECURITY: Caller should call Wipe() on the returned key when done
+	// to zero sensitive data from memory.
 	Load(name string) (EncryptedKey, error)
 
 	// Delete removes a key from the store.
 	// Returns ErrKeyStoreNotFound if no key exists with the given name.
 	// Returns ErrKeyStoreIO if the underlying storage fails.
 	//
-	// Implementations should ensure the key is securely wiped from storage.
+	// SECURITY: Implementations MUST:
+	//   1. Zero all byte slices (PrivKeyData, Salt, Nonce) before removal
+	//   2. For file backends: overwrite file contents before deletion
+	//   3. Call any provided secure deletion facilities
+	//
+	// Note: Go's GC may retain copies of data. See EncryptedKey.Wipe() docs.
 	Delete(name string) error
 
 	// List returns all key names in the store.
