@@ -47,4 +47,14 @@ var (
 
 	// ErrMaxRecursionDepth indicates maximum recursion depth exceeded
 	ErrMaxRecursionDepth = errors.New("maximum recursion depth exceeded")
+
+	// ErrSignDocMismatch indicates SignDoc reconstruction produced different bytes.
+	// SECURITY: This error indicates potential non-deterministic serialization or tampering.
+	ErrSignDocMismatch = errors.New("SignDoc reconstruction mismatch: non-deterministic serialization detected")
+
+	// ErrInvalidPublicKey indicates a malformed or unsupported public key
+	ErrInvalidPublicKey = errors.New("invalid public key")
+
+	// ErrUnsupportedAlgorithm indicates an unknown or unsupported signature algorithm
+	ErrUnsupportedAlgorithm = errors.New("unsupported signature algorithm")
 )
