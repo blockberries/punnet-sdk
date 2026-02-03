@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/blockberries/cramberry/pkg/cramberry"
 )
 
 // SignDocVersion is the current version of the SignDoc format.
@@ -135,7 +138,8 @@ type SignDoc struct {
 	Nonce StringUint64 `json:"nonce"`
 
 	// Memo is optional transaction metadata.
-	Memo string `json:"memo,omitempty"`
+	// Note: No omitempty - empty memo is still serialized for deterministic hashing.
+	Memo string `json:"memo"`
 
 	// Fee is the transaction fee.
 	Fee SignDocFee `json:"fee"`
@@ -206,6 +210,10 @@ func (sd *SignDoc) SetFeeSlippage(slippage SignDocRatio) {
 }
 
 // AddMessage appends a message to the SignDoc.
+//
+// PRECONDITION: data MUST be canonical JSON if deterministic signing is required.
+// Non-canonical JSON (e.g., {"b":1,"a":2}) will be preserved as-is, which may cause
+// signature mismatches across implementations that canonicalize message data.
 func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 	sd.Messages = append(sd.Messages, SignDocMessage{
 		Type: msgType,
@@ -213,14 +221,174 @@ func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 	})
 }
 
-// ToJSON serializes the SignDoc to canonical JSON bytes.
+// ToJSON serializes the SignDoc to canonical JSON bytes using Cramberry's
+// deterministic serialization functions.
 //
 // INVARIANT: Calling ToJSON() twice on an unmodified SignDoc returns identical bytes.
-// IMPLEMENTATION: We use a custom serialization to ensure key ordering and no trailing spaces.
+// INVARIANT: Output is compact (no whitespace between elements).
+// INVARIANT: All fields are included, even if empty/zero-valued.
+// INVARIANT: Numeric values are serialized as quoted strings (JavaScript BigInt safety).
+//
+// IMPLEMENTATION: Uses Cramberry library's deterministic JSON helpers:
+// - cramberry.EscapeJSONString for safe string escaping with proper Unicode handling
+// - Field order follows struct declaration order for reproducibility
+// - No reliance on map iteration (which is non-deterministic in Go)
+//
+// KNOWN LIMITATION (Unicode Normalization):
+// This implementation does NOT perform Unicode normalization (NFC/NFD).
+// Two strings that appear identical visually but differ in Unicode representation
+// (e.g., "café" composed U+00E9 vs decomposed U+0065+U+0301) will produce different
+// JSON bytes and thus different signatures. Applications that accept user input
+// should normalize strings to NFC before creating SignDocs to ensure consistent
+// behavior across implementations.
 func (sd *SignDoc) ToJSON() ([]byte, error) {
-	// Use Go's json package which produces deterministic output for structs
-	// (fields are serialized in declaration order).
-	return json.Marshal(sd)
+	var b strings.Builder
+
+	// Pre-allocate reasonable capacity to reduce allocations
+	b.Grow(256)
+
+	b.WriteString(`{"version":`)
+	b.WriteString(cramberry.EscapeJSONString(sd.Version))
+
+	b.WriteString(`,"chain_id":`)
+	b.WriteString(cramberry.EscapeJSONString(sd.ChainID))
+
+	b.WriteString(`,"account":`)
+	b.WriteString(cramberry.EscapeJSONString(sd.Account))
+
+	b.WriteString(`,"account_sequence":`)
+	b.WriteString(cramberry.EscapeJSONString(strconv.FormatUint(uint64(sd.AccountSequence), 10)))
+
+	b.WriteString(`,"messages":`)
+	if err := sd.writeMessagesJSON(&b); err != nil {
+		return nil, err
+	}
+
+	b.WriteString(`,"nonce":`)
+	b.WriteString(cramberry.EscapeJSONString(strconv.FormatUint(uint64(sd.Nonce), 10)))
+
+	// Memo is always included, even if empty (no omitempty behavior)
+	b.WriteString(`,"memo":`)
+	b.WriteString(cramberry.EscapeJSONString(sd.Memo))
+
+	b.WriteString(`,"fee":`)
+	sd.Fee.writeJSON(&b)
+
+	b.WriteString(`,"fee_slippage":`)
+	sd.FeeSlippage.writeJSON(&b)
+
+	b.WriteString(`}`)
+
+	return []byte(b.String()), nil
+}
+
+// writeMessagesJSON writes the messages array to the builder.
+func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
+	b.WriteString(`[`)
+	for i, msg := range sd.Messages {
+		if i > 0 {
+			b.WriteString(`,`)
+		}
+		b.WriteString(`{"type":`)
+		b.WriteString(cramberry.EscapeJSONString(msg.Type))
+		b.WriteString(`,"data":`)
+		// SECURITY: msg.Data is written directly without re-canonicalization.
+		// This is safe because ValidateBasic() ensures msg.Data is compact JSON (no whitespace).
+		//
+		// NOTE: Key ordering is NOT validated - msg.Data with {"b":1,"a":2} vs {"a":2,"b":1}
+		// will produce different signatures. This is acceptable because:
+		// 1. Message data typically comes from our own serialization code which is consistent
+		// 2. Re-canonicalization would add significant overhead for large messages
+		// 3. ValidateBasic() catches the most common issue (pretty-printed JSON from files)
+		if msg.Data == nil {
+			b.WriteString(`null`)
+		} else {
+			b.Write(msg.Data)
+		}
+		b.WriteString(`}`)
+	}
+	b.WriteString(`]`)
+	return nil
+}
+
+// writeJSON writes the SignDocFee to the builder in deterministic JSON format.
+func (f *SignDocFee) writeJSON(b *strings.Builder) {
+	b.WriteString(`{"amount":[`)
+	for i, coin := range f.Amount {
+		if i > 0 {
+			b.WriteString(`,`)
+		}
+		b.WriteString(`{"denom":`)
+		b.WriteString(cramberry.EscapeJSONString(coin.Denom))
+		b.WriteString(`,"amount":`)
+		b.WriteString(cramberry.EscapeJSONString(coin.Amount))
+		b.WriteString(`}`)
+	}
+	b.WriteString(`],"gas_limit":`)
+	b.WriteString(cramberry.EscapeJSONString(f.GasLimit))
+	b.WriteString(`}`)
+}
+
+// writeJSON writes the SignDocRatio to the builder in deterministic JSON format.
+func (r *SignDocRatio) writeJSON(b *strings.Builder) {
+	b.WriteString(`{"numerator":`)
+	b.WriteString(cramberry.EscapeJSONString(r.Numerator))
+	b.WriteString(`,"denominator":`)
+	b.WriteString(cramberry.EscapeJSONString(r.Denominator))
+	b.WriteString(`}`)
+}
+
+// EncodeBase64 encodes binary data as standard Base64 (RFC 4648).
+// This is a convenience wrapper around Cramberry's EncodeBase64 function.
+//
+// INVARIANT: Same input always produces identical output.
+func EncodeBase64(data []byte) string {
+	return cramberry.EncodeBase64(data)
+}
+
+// isCompactJSON checks if JSON bytes contain no unnecessary whitespace.
+// This is a security check to ensure msg.Data is in canonical form.
+//
+// SECURITY: Non-compact JSON in message data can lead to signature mismatches
+// across implementations that may canonicalize differently.
+//
+// Returns true if the JSON is compact (no whitespace outside of strings),
+// false if there are spaces, tabs, or newlines outside of quoted strings.
+func isCompactJSON(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+
+	inString := false
+	escape := false
+
+	for _, b := range data {
+		if escape {
+			escape = false
+			continue
+		}
+
+		if inString {
+			switch b {
+			case '\\':
+				escape = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		// Not in a string
+		switch b {
+		case '"':
+			inString = true
+		case ' ', '\t', '\n', '\r':
+			// Whitespace outside of a string - not compact
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetSignBytes returns the bytes that should be signed.
@@ -280,6 +448,15 @@ func (sd *SignDoc) ValidateBasic() error {
 		if len(msg.Data) > MaxMessageDataSize {
 			return fmt.Errorf("%w: message %d data too large (%d > %d)",
 				ErrSignDocMismatch, i, len(msg.Data), MaxMessageDataSize)
+		}
+
+		// SECURITY: Validate message data is compact JSON to ensure deterministic signing.
+		// Non-compact JSON (with whitespace outside strings) can cause signature mismatches
+		// across implementations. This catches the most common canonicalization issues.
+		// NOTE: This does NOT validate key ordering - that remains the caller's responsibility.
+		if !isCompactJSON(msg.Data) {
+			return fmt.Errorf("%w: message %d data is not compact JSON (contains whitespace outside strings)",
+				ErrSignDocMismatch, i)
 		}
 	}
 

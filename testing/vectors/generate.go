@@ -1,6 +1,7 @@
 package vectors
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -830,8 +831,15 @@ func buildSignDocFromInput(input TestVectorInput) *types.SignDoc {
 	)
 
 	// Add messages
+	// NOTE: msg.Data from JSON file may have whitespace; compact it to ensure
+	// deterministic serialization matches the expected sign_doc_json.
 	for _, msg := range input.Messages {
-		signDoc.AddMessage(msg.Type, msg.Data)
+		// Compact the JSON to remove any formatting whitespace
+		var compactData bytes.Buffer
+		if err := json.Compact(&compactData, msg.Data); err != nil {
+			panic("failed to compact message data: " + err.Error())
+		}
+		signDoc.AddMessage(msg.Type, json.RawMessage(compactData.Bytes()))
 	}
 
 	return signDoc

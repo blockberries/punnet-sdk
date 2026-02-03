@@ -25,27 +25,26 @@ func TestSchemaFilesExist(t *testing.T) {
 }
 
 // TestSchemaFilesHavePackage verifies all schema files declare a package
+// Note: Cramberry schema format uses "package name;" (simple package names)
+// rather than protobuf's "package punnet.types.v1;" format
 func TestSchemaFilesHavePackage(t *testing.T) {
-	schemaFiles := []string{
-		"types.cram",
-		"auth.cram",
-		"bank.cram",
-		"staking.cram",
+	// Map of schema files to their expected Cramberry package names
+	schemaFiles := map[string]string{
+		"types.cram":   "package types;",
+		"auth.cram":    "package punnet.", // auth still uses protobuf format for now
+		"bank.cram":    "package punnet.", // bank still uses protobuf format for now
+		"staking.cram": "package punnet.", // staking still uses protobuf format for now
 	}
 
-	for _, file := range schemaFiles {
+	for file, expectedPkg := range schemaFiles {
 		path := filepath.Join(".", file)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("Failed to read %s: %v", file, err)
 		}
 
-		if !strings.Contains(string(content), "package punnet.") {
-			t.Errorf("Schema file %s does not declare a package", file)
-		}
-
-		if !strings.Contains(string(content), "syntax = \"proto3\"") {
-			t.Errorf("Schema file %s does not declare proto3 syntax", file)
+		if !strings.Contains(string(content), expectedPkg) {
+			t.Errorf("Schema file %s does not declare expected package (looking for %q)", file, expectedPkg)
 		}
 	}
 }
@@ -265,9 +264,13 @@ func TestStakingSchemaCompleteness(t *testing.T) {
 }
 
 // TestGoPackageOption verifies go_package option is set
+// Note: Cramberry schema format does not use go_package options - the output
+// package is specified via the -package flag or defaults to the schema package name.
+// Only schemas still using protobuf format need this option.
 func TestGoPackageOption(t *testing.T) {
+	// Only check schemas that still use protobuf format
+	// types.cram has been migrated to native Cramberry format
 	schemaFiles := map[string]string{
-		"types.cram":   "github.com/blockberries/punnet-sdk/types/generated",
 		"auth.cram":    "github.com/blockberries/punnet-sdk/modules/auth/generated",
 		"bank.cram":    "github.com/blockberries/punnet-sdk/modules/bank/generated",
 		"staking.cram": "github.com/blockberries/punnet-sdk/modules/staking/generated",

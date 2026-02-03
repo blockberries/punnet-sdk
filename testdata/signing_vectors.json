@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated": "2026-02-03T06:01:02.768678Z",
+  "generated": "2026-02-03T08:52:27.80547Z",
   "description": "Cross-implementation test vectors for Punnet SDK signing system",
   "vectors": [
     {
@@ -37,13 +37,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"42\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000000\"}}],\"nonce\":\"42\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"}],\"gas_limit\":\"200000\"},\"fee_slippage\":{\"numerator\":\"1\",\"denominator\":\"100\"}}",
-        "sign_bytes_hex": "378f48b3f6ef5113af38834bb3f7eafd0e894871aa500f9fde8f6083687af3b0",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"42\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000000\"}}],\"nonce\":\"42\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"}],\"gas_limit\":\"200000\"},\"fee_slippage\":{\"numerator\":\"1\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "a0d621ab6ee70419f5f4506cf103d9b3feaf5912fc45272f485e06e976aed86d",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "287ba33139bf793b280180c1c7c5b195269141e7ee01ea64a8b51105e9511a8819e10cd9ca6bfcefc1d8731f7498635bcaadaac38c0b22f8f6cad325a87b160f"
+            "signature_hex": "d8598c8529a42218d691f89aa204dc7117a4502314dd02b79632da6cd551ed4836bc131e46eb2102314b9d0a10e6454a116d7973aacd88c953e214e9072fc506"
           }
         }
       }
@@ -98,13 +98,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"10\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"500000\"}},{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"charlie\",\"amount\":\"300000\"}},{\"type\":\"/punnet.staking.v1.MsgDelegate\",\"data\":{\"delegator\":\"alice\",\"validator\":\"val1\",\"amount\":\"200000\"}}],\"nonce\":\"10\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"10000\"}],\"gas_limit\":\"500000\"},\"fee_slippage\":{\"numerator\":\"5\",\"denominator\":\"100\"}}",
-        "sign_bytes_hex": "cbb866e380cd90887cf8e67dd5d81951ebdf86ca5fe8d3d09613b5336c27803a",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"10\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"500000\"}},{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"charlie\",\"amount\":\"300000\"}},{\"type\":\"/punnet.staking.v1.MsgDelegate\",\"data\":{\"delegator\":\"alice\",\"validator\":\"val1\",\"amount\":\"200000\"}}],\"nonce\":\"10\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"10000\"}],\"gas_limit\":\"500000\"},\"fee_slippage\":{\"numerator\":\"5\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "e6c354ecfbcb83c986f45dae1d3dcf41af701b57310833033de1407f10b48cee",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "6cd51e636181b41a70d1f34651be022a158990aa45811b3f721c67e874db3099211bb30aa450293a16a17402ebf368805c3e29de12ccbbc10a6aa117f8e5c100"
+            "signature_hex": "469ca7f814027c61d76c675cfd02926be555403949992a266477ade854de7db3708aa4950eec41acf37f552d0027c113664c03a2b87545a5953b300cd754f807"
           }
         }
       }
@@ -189,13 +189,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"5\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"5\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"1000000\"}],\"gas_limit\":\"1000000\"},\"fee_slippage\":{\"numerator\":\"10\",\"denominator\":\"100\"}}",
-        "sign_bytes_hex": "bd725d5312dea0d21c8260ffe8eb3576f103219c54bbac2577ca64505c10cbdb",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"5\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"5\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"1000000\"}],\"gas_limit\":\"1000000\"},\"fee_slippage\":{\"numerator\":\"10\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "4b9efae3fe82bfddefcf036945741d01e58db8c541dc5b1455fad128fe36f7e8",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "8bb877d94bce667f1575f10e7230b920b8f8c68a160a03b160409ee0c6671dba4f3764f3afb9b08a512f41cf77681a85945de0f0cebe0ce7e21619a45a42550e"
+            "signature_hex": "ce5d37c76b1555adf2b569bde8f1cf8f563a9e1031d0d6eac7117f8ec505e05a036410284d142c50de0569646009e7d4c06e13edbea849e09aa733c736ee050a"
           }
         }
       }
@@ -242,13 +242,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"20\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000\"}}],\"nonce\":\"20\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"},{\"denom\":\"uatom\",\"amount\":\"3000\"},{\"denom\":\"token\",\"amount\":\"1000\"}],\"gas_limit\":\"300000\"},\"fee_slippage\":{\"numerator\":\"2\",\"denominator\":\"100\"}}",
-        "sign_bytes_hex": "03e129e1b2d292389335a55dc2845a86ab1e2d5829b300a73d2dc5f7beb90c27",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"20\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000\"}}],\"nonce\":\"20\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"},{\"denom\":\"uatom\",\"amount\":\"3000\"},{\"denom\":\"token\",\"amount\":\"1000\"}],\"gas_limit\":\"300000\"},\"fee_slippage\":{\"numerator\":\"2\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "bfc1645f176a7322255fbbec9b77d8af2e445c1a530d2ea559ef291d124fa547",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "5f6c7a708c3869cca54170a1505b1424f15271074ed434d4e36ed3d754dc8abd6694ea297bba47df2c5a3293d2734d1e4d73649cc003c361912107496aa2dd04"
+            "signature_hex": "11b29c242b5e1b905c1693b99c94392b3e57c7f87f9777747263dd7188586e8ef64e6790b390ea9a52282de6311e2b839637f090aa4eb4844e35c3aae2f79b06"
           }
         }
       }
@@ -278,13 +278,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"key-derivation-test\",\"account\":\"test\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.KeyDerivation\",\"data\":{}}],\"nonce\":\"0\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
-        "sign_bytes_hex": "feed80fa5fc4b303473e0a665f87c21fc8dc6b98d6d18b2bd6bc72ae46b823df",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"key-derivation-test\",\"account\":\"test\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.KeyDerivation\",\"data\":{}}],\"nonce\":\"0\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "1031d531b0ddf9d0b43276fc92043ffb42de34a62e9a9818a3bb21174a295358",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "c010736b4b2aebd2298fbb0b1852a3fe6ce4a2a6eca3ee2a441de2a8813a50a5b38fdfde34401b28a2f9488f559e1ecaf60703b421f1c85ad07fefca90c99a0e"
+            "signature_hex": "a93691e2ffeacab3d41912cfc1276414bca3b819653257a44b78ad1cec56d71108cf0d06cdc97032717ff565a45c3ca6b3e3bfddc2f3553c0d467f7fbdc0190e"
           },
           "ed25519_seed": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89",
@@ -367,13 +367,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"1\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
-        "sign_bytes_hex": "585878aa3c52b8cf2b544a0376b8ce4cd4f0226b095b094466d0b642fc0153ba",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"1\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "fa84439514686560274ba54b53348754401494f1bc537c8b7769b558b7bc4d1f",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "cbe965411f1bc89a31bb523b2658b871b9b0a34efc3c4ed47b32ce4d71d9b63c51ec2d9e3a3fb761ec6ff8cafe3a0a82803a73d4e85d4d6bce50f2360d032503"
+            "signature_hex": "404dc420a59715ac0334996594475f7e26214b6131d8315876675627a7354dfbd208622ea8919a3907ab34ab2ef28d76db0382fc953a207bf7cbb659ea082c09"
           }
         }
       }
@@ -410,13 +410,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"zero-test\",\"account\":\"zero\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.Zero\",\"data\":{\"value\":\"0\"}}],\"nonce\":\"0\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"0\"}],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
-        "sign_bytes_hex": "65e14e916ac3cfdd2a84e7232d0bee6a2e43d550f6702cbdfaf709fdd926f235",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"zero-test\",\"account\":\"zero\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.Zero\",\"data\":{\"value\":\"0\"}}],\"nonce\":\"0\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"0\"}],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "c6e1cfb2fb08df7ba2ed8a3ef22c4f54b511fc32f91033b206db0e3618154c6b",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "1f48c6fe607025e720179c3d5170068f1e5de4c4db8dcd2b92e2a6da0f2367bfad4e6101f360a051905cedb8c9d20162b604adbede9c1c43fce21cc78d03410b"
+            "signature_hex": "12558e2c260950c943b202f62abb93132a7bfd6995c10c2fdd702c844f5986ef2524ec793ad5ff50c9badc09b03d88c4b1733fd2a473e471cd7e37ac01840f01"
           }
         }
       }
@@ -453,13 +453,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"large-numbers-test\",\"account\":\"bignum\",\"account_sequence\":\"18446744073709551615\",\"messages\":[{\"type\":\"/test.LargeNumber\",\"data\":{\"amount\":\"18446744073709551615\"}}],\"nonce\":\"18446744073709551615\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"18446744073709551615\"}],\"gas_limit\":\"18446744073709551615\"},\"fee_slippage\":{\"numerator\":\"18446744073709551615\",\"denominator\":\"18446744073709551615\"}}",
-        "sign_bytes_hex": "7b8e74f05dd72cc25410d75a4464a4dd9c039ef77ea7c6178e48e558f10b6cbe",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"large-numbers-test\",\"account\":\"bignum\",\"account_sequence\":\"18446744073709551615\",\"messages\":[{\"type\":\"/test.LargeNumber\",\"data\":{\"amount\":\"18446744073709551615\"}}],\"nonce\":\"18446744073709551615\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"18446744073709551615\"}],\"gas_limit\":\"18446744073709551615\"},\"fee_slippage\":{\"numerator\":\"18446744073709551615\",\"denominator\":\"18446744073709551615\"}}",
+        "sign_bytes_hex": "49ca8b66f38e2ef6359e909d21e35a6b357e94b9f28ee653c3cd8f6c74f12dac",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "e6bd0050edb27e5b7d386448e69dbcd32d3ede151c1c4bf433b5b6a77d8403265044931fa82ee1088aa547828e57f05d807a5aa8202c14ccb06fe302cb580e0c"
+            "signature_hex": "6330fee1cbd53fb77254644f36de63e8044f22d95086e7cefa4303d7979c6feaa97459f5ad41b5aedab92badd2a836aea24f9f83017f06f444ff06b2ca3a780a"
           }
         }
       }
@@ -579,13 +579,13 @@
         }
       },
       "expected": {
-        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"m\",\"account\":\"a\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/m\",\"data\":{}}],\"nonce\":\"0\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
-        "sign_bytes_hex": "01a1182ddb65ad005da1419fb5bf01061a2ea876a884d179d9cf11913867767e",
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"m\",\"account\":\"a\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/m\",\"data\":{}}],\"nonce\":\"0\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "44f0df4757598834537ac8428f50443a0400a5f8fea368ce3d131cd8d7d4f374",
         "signatures": {
           "ed25519": {
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
-            "signature_hex": "a6617e08d4d054f535a6f18481bc9556be5a38677033981747ebe454e98db8db94560855c0aada343e44eeac429df1f85ddbd7143e4571cc567e2a626db64008"
+            "signature_hex": "fdd34a1f7644e01cb9e7dce923fb96fc0ea1db5b16df2e84601689c6f34f530e095b55468e23e2e7b8425dfd72b50085e57a6de4843f501f8a32edfe07116c00"
           }
         }
       }
