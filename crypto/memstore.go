@@ -38,6 +38,8 @@ func NewMemoryStoreWithCapacity(capacity int) *MemoryStore {
 
 // Get retrieves a key entry by name.
 // Returns a clone to prevent external mutation.
+// The read lock is held until Clone() completes to prevent race conditions
+// with concurrent Delete() operations that zeroize private key material.
 func (s *MemoryStore) Get(name string) (*KeyEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
