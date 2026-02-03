@@ -977,6 +977,212 @@ func TestKeyringCloseZeroizesCache(t *testing.T) {
 	}
 }
 
+// TestKeyringConcurrentClose tests that Close() is thread-safe when called
+// concurrently with other operations. This verifies:
+// 1. No race conditions between Close() and other operations
+// 2. Operations during/after Close() correctly return ErrKeyringClosed
+// 3. No panics from accessing nil'd cache or cleaned-up resources
+func TestKeyringConcurrentClose(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Pre-create keys to operate on
+	const numKeys = 10
+	for i := 0; i < numKeys; i++ {
+		name := fmt.Sprintf("key-%d", i)
+		_, err := kr.NewKey(name, AlgorithmEd25519)
+		if err != nil {
+			t.Fatalf("setup NewKey %s failed: %v", name, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 200)
+
+	// Launch concurrent GetKey operations
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				name := fmt.Sprintf("key-%d", (id+j)%numKeys)
+				_, err := kr.GetKey(name)
+				// Expected: success before close, ErrKeyringClosed after
+				if err != nil && err != ErrKeyringClosed && err != ErrKeyNotFound {
+					errors <- fmt.Errorf("GetKey %s: unexpected error: %w", name, err)
+				}
+			}
+		}(i)
+	}
+
+	// Launch concurrent Sign operations
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			data := []byte("test data to sign")
+			for j := 0; j < 10; j++ {
+				name := fmt.Sprintf("key-%d", (id+j)%numKeys)
+				_, err := kr.Sign(name, data)
+				// Expected: success before close, ErrKeyringClosed after
+				if err != nil && err != ErrKeyringClosed && err != ErrKeyNotFound {
+					errors <- fmt.Errorf("Sign %s: unexpected error: %w", name, err)
+				}
+			}
+		}(i)
+	}
+
+	// Launch concurrent NewKey operations (should fail with ErrKeyExists or ErrKeyringClosed)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				name := fmt.Sprintf("new-key-%d-%d", id, j)
+				_, err := kr.NewKey(name, AlgorithmEd25519)
+				// Expected: success, ErrKeyringClosed, or ErrKeyExists
+				if err != nil && err != ErrKeyringClosed && err != ErrKeyExists {
+					errors <- fmt.Errorf("NewKey %s: unexpected error: %w", name, err)
+				}
+			}
+		}(i)
+	}
+
+	// Launch concurrent ListKeys operations
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, err := kr.ListKeys()
+				if err != nil && err != ErrKeyringClosed {
+					errors <- fmt.Errorf("ListKeys: unexpected error: %w", err)
+				}
+			}
+		}()
+	}
+
+	// Launch Close() concurrently
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Small delay to let some operations start
+		_ = kr.Close()
+	}()
+
+	wg.Wait()
+	close(errors)
+
+	// Collect any unexpected errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	if len(errList) > 0 {
+		t.Errorf("unexpected errors during concurrent close: %v", errList)
+	}
+
+	// Verify keyring is definitely closed now
+	_, err := kr.GetKey("key-0")
+	if err != ErrKeyringClosed {
+		t.Errorf("expected ErrKeyringClosed after concurrent close, got: %v", err)
+	}
+
+	// Verify second Close() is safe (idempotent)
+	err = kr.Close()
+	if err != nil {
+		t.Errorf("second Close() should return nil, got: %v", err)
+	}
+}
+
+// TestKeyringConcurrentCloseWithDelete tests Close() racing with Delete operations.
+// This is a particularly sensitive race because DeleteKey modifies the cache.
+func TestKeyringConcurrentCloseWithDelete(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Pre-create keys
+	const numKeys = 20
+	for i := 0; i < numKeys; i++ {
+		name := fmt.Sprintf("del-key-%d", i)
+		_, err := kr.NewKey(name, AlgorithmEd25519)
+		if err != nil {
+			t.Fatalf("setup NewKey %s failed: %v", name, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 100)
+
+	// Launch concurrent Delete operations
+	for i := 0; i < numKeys; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			name := fmt.Sprintf("del-key-%d", id)
+			err := kr.DeleteKey(name)
+			// Expected: success, ErrKeyNotFound, or ErrKeyringClosed
+			if err != nil && err != ErrKeyringClosed && err != ErrKeyNotFound {
+				errors <- fmt.Errorf("DeleteKey %s: unexpected error: %w", name, err)
+			}
+		}(i)
+	}
+
+	// Launch Close() concurrently
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = kr.Close()
+	}()
+
+	wg.Wait()
+	close(errors)
+
+	// Collect any unexpected errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	if len(errList) > 0 {
+		t.Errorf("unexpected errors during concurrent close+delete: %v", errList)
+	}
+
+	// Verify closed
+	err := kr.DeleteKey("any-key")
+	if err != ErrKeyringClosed {
+		t.Errorf("expected ErrKeyringClosed, got: %v", err)
+	}
+}
+
+// TestKeyringRapidCloseReopen simulates rapid close cycles to catch
+// any timing issues with the closed flag.
+func TestKeyringRapidCloseReopen(t *testing.T) {
+	for round := 0; round < 10; round++ {
+		store := NewMemoryStore()
+		kr := NewKeyring(store)
+
+		// Create some keys
+		for i := 0; i < 5; i++ {
+			name := fmt.Sprintf("round%d-key%d", round, i)
+			_, err := kr.NewKey(name, AlgorithmEd25519)
+			if err != nil {
+				t.Fatalf("round %d: NewKey failed: %v", round, err)
+			}
+		}
+
+		// Close
+		if err := kr.Close(); err != nil {
+			t.Errorf("round %d: Close failed: %v", round, err)
+		}
+
+		// Verify closed
+		_, err := kr.GetKey(fmt.Sprintf("round%d-key0", round))
+		if err != ErrKeyringClosed {
+			t.Errorf("round %d: expected ErrKeyringClosed, got: %v", round, err)
+		}
+	}
+}
+
 func BenchmarkKeyringClose(b *testing.B) {
 	// Benchmark Close() with various numbers of keys
 	for _, numKeys := range []int{10, 100, 1000} {
