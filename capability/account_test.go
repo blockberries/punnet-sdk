@@ -558,7 +558,7 @@ func XTestAccountCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 			defer wg.Done()
 			name := types.AccountName(string(rune('a' + (id % 26))))
 			pubKey := []byte("test-pubkey-123456789012345678901234")
-			cap.CreateAccount(ctx, name, pubKey)
+			_, _ = cap.CreateAccount(ctx, name, pubKey) // May succeed or fail, testing concurrency safety
 		}(i)
 	}
 
@@ -567,7 +567,7 @@ func XTestAccountCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			name := types.AccountName(string(rune('a' + (id % 26))))
-			cap.GetAccount(ctx, name)
+			_, _ = cap.GetAccount(ctx, name) // May succeed or fail, testing concurrency safety
 		}(i)
 	}
 
@@ -576,7 +576,7 @@ func XTestAccountCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			name := types.AccountName(string(rune('a' + (id % 26))))
-			cap.IncrementNonce(ctx, name)
+			_ = cap.IncrementNonce(ctx, name) // May succeed or fail, testing concurrency safety
 		}(i)
 	}
 

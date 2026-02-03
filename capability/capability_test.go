@@ -352,7 +352,7 @@ func TestConcurrentRegisterModule(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			moduleName := string(rune('a' + (id % 26)))
-			cm.RegisterModule(moduleName)
+			_ = cm.RegisterModule(moduleName) // May succeed or fail, testing concurrency safety
 		}(i)
 	}
 

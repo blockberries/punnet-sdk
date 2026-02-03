@@ -556,6 +556,7 @@ func TestInsufficientSignatures(t *testing.T) {
 }
 
 // helper to create messages for tests with json data
+// nolint:unused // Reserved for future tests requiring message JSON data
 func makeTestMessageJSON(t *testing.T, msgType string, signers []AccountName) (Message, json.RawMessage) {
 	msg := &testMessage{
 		MsgType: msgType,

@@ -192,6 +192,7 @@ func TestApplication_BeginBlock_NilContext(t *testing.T) {
 	app := setupTestApp(t)
 	header := NewBlockHeader(1, time.Now(), "test-chain", nil)
 
+	// nolint:staticcheck // SA1012: intentionally testing nil context handling
 	err := app.BeginBlock(nil, header)
 	if err == nil {
 		t.Fatal("expected error with nil context")

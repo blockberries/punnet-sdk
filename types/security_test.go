@@ -24,7 +24,7 @@ func TestMemoryAliasing_TransactionMessages(t *testing.T) {
 	assert.Equal(t, 0, len(tx.Messages))
 
 	// Attempt to mutate original slice (this should NOT affect transaction)
-	messages = append(messages, nil)
+	_ = append(messages, nil) // Result discarded - we're testing the transaction wasn't affected
 
 	// Verify transaction still has empty messages
 	assert.Equal(t, 0, len(tx.Messages))
