@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"runtime"
 )
@@ -224,4 +225,68 @@ func PublicKeyFromBytes(algo Algorithm, data []byte) (PublicKey, error) {
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
 	}
+}
+
+// SerializablePublicKey wraps a PublicKey for JSON serialization.
+// JSON format: {"pub_key": "<base64>", "algorithm": "<algo>"}
+//
+// Complexity: O(n) for marshaling/unmarshaling where n is key size.
+// Memory: One allocation for base64 encoding during marshal.
+type SerializablePublicKey struct {
+	key PublicKey
+}
+
+// serializablePublicKeyJSON is the JSON representation.
+type serializablePublicKeyJSON struct {
+	PubKey    string    `json:"pub_key"`
+	Algorithm Algorithm `json:"algorithm"`
+}
+
+// NewSerializablePublicKey wraps a PublicKey for JSON serialization.
+func NewSerializablePublicKey(key PublicKey) *SerializablePublicKey {
+	return &SerializablePublicKey{key: key}
+}
+
+// PublicKey returns the underlying PublicKey.
+func (s *SerializablePublicKey) PublicKey() PublicKey {
+	return s.key
+}
+
+// MarshalJSON implements json.Marshaler.
+// Encodes the public key as Base64 standard encoding.
+func (s *SerializablePublicKey) MarshalJSON() ([]byte, error) {
+	if s.key == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(serializablePublicKeyJSON{
+		PubKey:    base64.StdEncoding.EncodeToString(s.key.Bytes()),
+		Algorithm: s.key.Algorithm(),
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+// Decodes the public key from Base64 standard encoding.
+func (s *SerializablePublicKey) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		s.key = nil
+		return nil
+	}
+
+	var j serializablePublicKeyJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return fmt.Errorf("invalid public key JSON: %w", err)
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(j.PubKey)
+	if err != nil {
+		return fmt.Errorf("invalid public key base64: %w", err)
+	}
+
+	key, err := PublicKeyFromBytes(j.Algorithm, keyBytes)
+	if err != nil {
+		return fmt.Errorf("invalid public key: %w", err)
+	}
+
+	s.key = key
+	return nil
 }

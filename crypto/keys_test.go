@@ -3,7 +3,9 @@ package crypto
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -732,4 +734,174 @@ func TestBenchmarkBaseline_SignVerify(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================================
+// JSON Marshaling Tests
+// ============================================================================
+
+func TestSerializablePublicKey_MarshalJSON(t *testing.T) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		t.Run(string(algo), func(t *testing.T) {
+			key, err := GeneratePrivateKey(algo)
+			require.NoError(t, err)
+
+			pubKey := key.PublicKey()
+			serializable := NewSerializablePublicKey(pubKey)
+
+			data, err := json.Marshal(serializable)
+			require.NoError(t, err)
+
+			// Verify JSON structure
+			var parsed map[string]interface{}
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			assert.Contains(t, parsed, "pub_key")
+			assert.Contains(t, parsed, "algorithm")
+			assert.Equal(t, string(algo), parsed["algorithm"])
+
+			// Verify base64 is valid
+			b64 := parsed["pub_key"].(string)
+			decoded, err := base64.StdEncoding.DecodeString(b64)
+			require.NoError(t, err)
+			assert.Equal(t, pubKey.Bytes(), decoded)
+		})
+	}
+}
+
+func TestSerializablePublicKey_UnmarshalJSON(t *testing.T) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		t.Run(string(algo), func(t *testing.T) {
+			key, err := GeneratePrivateKey(algo)
+			require.NoError(t, err)
+
+			original := key.PublicKey()
+			serializable := NewSerializablePublicKey(original)
+
+			// Marshal
+			data, err := json.Marshal(serializable)
+			require.NoError(t, err)
+
+			// Unmarshal
+			var restored SerializablePublicKey
+			err = json.Unmarshal(data, &restored)
+			require.NoError(t, err)
+
+			// Verify equality
+			assert.True(t, original.Equals(restored.PublicKey()))
+			assert.Equal(t, original.Algorithm(), restored.PublicKey().Algorithm())
+		})
+	}
+}
+
+func TestSerializablePublicKey_RoundTrip(t *testing.T) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		t.Run(string(algo), func(t *testing.T) {
+			key, err := GeneratePrivateKey(algo)
+			require.NoError(t, err)
+
+			original := key.PublicKey()
+
+			// Create serializable, marshal, unmarshal
+			serializable := NewSerializablePublicKey(original)
+			data, err := json.Marshal(serializable)
+			require.NoError(t, err)
+
+			var restored SerializablePublicKey
+			err = json.Unmarshal(data, &restored)
+			require.NoError(t, err)
+
+			// Sign with original key, verify with restored public key
+			testData := []byte("test message for verification")
+			signature, err := key.Sign(testData)
+			require.NoError(t, err)
+
+			assert.True(t, restored.PublicKey().Verify(testData, signature))
+		})
+	}
+}
+
+func TestSerializablePublicKey_NullHandling(t *testing.T) {
+	// Test marshaling nil key
+	serializable := &SerializablePublicKey{}
+	data, err := json.Marshal(serializable)
+	require.NoError(t, err)
+	assert.Equal(t, "null", string(data))
+
+	// Test unmarshaling null
+	var restored SerializablePublicKey
+	err = json.Unmarshal([]byte("null"), &restored)
+	require.NoError(t, err)
+	assert.Nil(t, restored.PublicKey())
+}
+
+func TestSerializablePublicKey_InvalidJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{
+			name:    "invalid json",
+			input:   `{invalid}`,
+			wantErr: "looking for beginning of object key string",
+		},
+		{
+			name:    "invalid base64",
+			input:   `{"pub_key": "!!!invalid!!!", "algorithm": "ed25519"}`,
+			wantErr: "invalid public key base64",
+		},
+		{
+			name:    "wrong key size",
+			input:   `{"pub_key": "AQID", "algorithm": "ed25519"}`,
+			wantErr: "invalid public key",
+		},
+		{
+			name:    "invalid algorithm",
+			input:   `{"pub_key": "AQIDBAUG", "algorithm": "unknown"}`,
+			wantErr: "unknown algorithm",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s SerializablePublicKey
+			err := json.Unmarshal([]byte(tt.input), &s)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestSerializablePublicKey_JSONFormat(t *testing.T) {
+	// Test that JSON matches the specified format exactly
+	key, err := GeneratePrivateKey(AlgorithmEd25519)
+	require.NoError(t, err)
+
+	serializable := NewSerializablePublicKey(key.PublicKey())
+	data, err := json.Marshal(serializable)
+	require.NoError(t, err)
+
+	// Parse and verify structure
+	var parsed struct {
+		PubKey    string `json:"pub_key"`
+		Algorithm string `json:"algorithm"`
+	}
+	err = json.Unmarshal(data, &parsed)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ed25519", parsed.Algorithm)
+	assert.NotEmpty(t, parsed.PubKey)
+
+	// Verify the base64 decodes to correct length
+	decoded, err := base64.StdEncoding.DecodeString(parsed.PubKey)
+	require.NoError(t, err)
+	assert.Len(t, decoded, 32) // Ed25519 public key is 32 bytes
 }
