@@ -40,12 +40,13 @@ func NewMemoryStoreWithCapacity(capacity int) *MemoryStore {
 // Returns a clone to prevent external mutation.
 func (s *MemoryStore) Get(name string) (*KeyEntry, error) {
 	s.mu.RLock()
-	entry, ok := s.keys[name]
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
 
+	entry, ok := s.keys[name]
 	if !ok {
 		return nil, ErrKeyNotFound
 	}
+	// Clone must be called under lock to prevent race with Delete's Zeroize
 	return entry.Clone(), nil
 }
 
