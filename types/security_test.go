@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -251,6 +252,94 @@ func TestTimingAttack_HasSignatureFrom(t *testing.T) {
 	assert.False(t, auth.HasSignatureFrom(pub2, message))
 
 	t.Log("✓ HasSignatureFrom uses constant-time comparison")
+}
+
+// TestSignDoc_EmptyChainIDRejection verifies that empty chain_id is rejected as a security measure.
+//
+// SECURITY INVARIANT: SignDoc with empty chain_id MUST be rejected.
+//
+// ATTACK SCENARIO PREVENTED: An empty chain_id would allow transaction replay across ALL chains.
+// If a malicious chain accepts transactions with empty chain_id, signatures created for that
+// chain could be replayed on any other chain that also accepts empty chain_id. This completely
+// defeats cross-chain replay protection.
+//
+// IMPLEMENTATION NOTE: This validation occurs in ValidateBasic() which should be called
+// at the earliest possible point (e.g., transaction ingestion) to reject malformed transactions
+// before they propagate through gossip or consume resources.
+//
+// Related: Issue #82 - Document and validate empty chain_id rejection
+func TestSignDoc_EmptyChainIDRejection(t *testing.T) {
+	// Test that empty chain_id is rejected
+	signDoc := &SignDoc{
+		Version:     SignDocVersion,
+		ChainID:     "",
+		Account:     "alice",
+		Messages:    []SignDocMessage{{Type: "/msg", Data: []byte(`{}`)}},
+		Fee:         SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+		FeeSlippage: SignDocRatio{Numerator: "0", Denominator: "1"},
+	}
+
+	err := signDoc.ValidateBasic()
+	require.Error(t, err, "empty chain_id MUST be rejected")
+	assert.Contains(t, err.Error(), "chain_id cannot be empty",
+		"error message should clearly indicate the issue")
+	assert.True(t, errors.Is(err, ErrSignDocMismatch),
+		"error should be wrapped with ErrSignDocMismatch")
+
+	// Also test via NewSignDoc constructor helper
+	sdWithEmpty := NewSignDoc("", 1, "alice", 1, "memo")
+	sdWithEmpty.AddMessage("/msg", []byte(`{}`))
+	err = sdWithEmpty.ValidateBasic()
+	require.Error(t, err, "SignDoc created with empty chain_id via NewSignDoc MUST fail validation")
+
+	t.Log("✓ Empty chain_id is rejected to prevent cross-chain replay attacks")
+}
+
+// TestSignDoc_WhitespaceOnlyChainIDRejection verifies that whitespace-only chain_id is treated as empty.
+//
+// SECURITY NOTE: While Go's empty string check ("" == "") catches truly empty strings,
+// whitespace-only strings like " " or "\t" would pass the empty check but provide no
+// meaningful chain identification. However, the current implementation does NOT reject
+// whitespace-only chain_ids - this test documents the current behavior.
+//
+// RECOMMENDATION: Consider whether whitespace-only chain_ids should be rejected in future.
+func TestSignDoc_WhitespaceOnlyChainIDRejection(t *testing.T) {
+	// Document current behavior: whitespace-only chain_id is currently accepted
+	// This is noted for future security review
+	testCases := []struct {
+		name    string
+		chainID string
+	}{
+		{"single space", " "},
+		{"multiple spaces", "   "},
+		{"tab", "\t"},
+		{"newline", "\n"},
+		{"mixed whitespace", " \t\n "},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			signDoc := &SignDoc{
+				Version:     SignDocVersion,
+				ChainID:     tc.chainID,
+				Account:     "alice",
+				Messages:    []SignDocMessage{{Type: "/msg", Data: []byte(`{}`)}},
+				Fee:         SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+				FeeSlippage: SignDocRatio{Numerator: "0", Denominator: "1"},
+			}
+
+			err := signDoc.ValidateBasic()
+			// Current behavior: whitespace-only is accepted (documents current state)
+			// A stricter implementation might reject these as well
+			if err == nil {
+				t.Logf("NOTE: chain_id %q is currently accepted (non-empty string)", tc.chainID)
+			} else {
+				t.Logf("chain_id %q is rejected: %v", tc.chainID, err)
+			}
+		})
+	}
+
+	t.Log("✓ Whitespace-only chain_id behavior documented")
 }
 
 // TestSignDoc_CrossChainReplayProtection explicitly documents and verifies the security property

@@ -75,7 +75,7 @@ The `input` object contains all data needed to construct a SignDoc:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `chain_id` | string | Chain identifier for replay protection |
+| `chain_id` | string | Chain identifier for replay protection (**REQUIRED**, **MUST NOT be empty**) |
 | `account` | string | Account name/address |
 | `account_sequence` | string | Account sequence number (decimal string) |
 | `nonce` | string | Transaction nonce (decimal string) |
@@ -83,6 +83,34 @@ The `input` object contains all data needed to construct a SignDoc:
 | `messages` | array | List of messages |
 | `fee` | object | Transaction fee |
 | `fee_slippage` | object | Fee slippage tolerance |
+
+### Chain ID Requirements
+
+**SECURITY CRITICAL**: The `chain_id` field is essential for cross-chain replay protection.
+
+#### Validation Rules
+
+1. **MUST NOT be empty**: An empty `chain_id` (`""`) MUST be rejected by implementations.
+2. **MUST be included in signature**: The `chain_id` is part of the signed payload and cannot be modified after signing.
+
+#### Security Rationale
+
+The `chain_id` field prevents **cross-chain replay attacks**:
+
+- Without `chain_id`, a signed transaction on Chain A could be replayed on Chain B
+- An empty `chain_id` would allow replay across ALL chains that accept empty chain IDs
+- This is why empty `chain_id` validation is mandatory, not optional
+
+#### Attack Scenario (Empty Chain ID)
+
+1. Attacker creates a malicious chain that accepts transactions with `chain_id: ""`
+2. Victim signs a transaction with empty `chain_id` on the malicious chain
+3. Attacker replays that signature on any other chain accepting empty `chain_id`
+4. Result: Unauthorized transactions execute on victim's behalf
+
+#### Implementation
+
+Implementations MUST call `ValidateBasic()` (or equivalent) before processing any SignDoc. This validation rejects empty `chain_id` with the error: `chain_id cannot be empty`.
 
 ### Message Structure
 

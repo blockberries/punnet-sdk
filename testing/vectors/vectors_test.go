@@ -272,6 +272,47 @@ func TestVectorCategories(t *testing.T) {
 	t.Logf("Vector categories: %v", categories)
 }
 
+// TestEmptyChainIDRejection verifies that empty chain_id is rejected.
+//
+// SECURITY: Empty chain_id would allow cross-chain replay attacks.
+// This test documents the security requirement and verifies the validation.
+//
+// Related: Issue #82 - Document and validate empty chain_id rejection
+func TestEmptyChainIDRejection(t *testing.T) {
+	// Test with empty chain_id
+	input := TestVectorInput{
+		ChainID:         "", // INVALID: empty chain_id
+		Account:         "alice",
+		AccountSequence: "1",
+		Nonce:           "1",
+		Memo:            "",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.msg",
+				Data: []byte(`{}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{},
+			GasLimit: "0",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+
+	// ValidateBasic MUST reject empty chain_id
+	err := signDoc.ValidateBasic()
+	require.Error(t, err, "empty chain_id MUST be rejected to prevent cross-chain replay attacks")
+	assert.Contains(t, err.Error(), "chain_id cannot be empty",
+		"error message should clearly indicate the issue")
+
+	t.Log("✓ Empty chain_id is rejected to prevent cross-chain replay attacks")
+}
+
 // TestSignatureVerificationWithCryptoPackage tests using the crypto package.
 func TestSignatureVerificationWithCryptoPackage(t *testing.T) {
 	vectors, err := GenerateTestVectors()
