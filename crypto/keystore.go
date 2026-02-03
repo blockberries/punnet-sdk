@@ -52,6 +52,11 @@ const forbiddenKeyNameChars = "/\\:*?\"<>|"
 // KeyStore provides persistent storage for keys using KeyEntry.
 // Implementations must be thread-safe.
 // Used by Keyring implementation for simple key management.
+//
+// CORRECTNESS NOTE: The Keyring relies on KeyStore.Put with overwrite=false
+// being atomic with respect to existence checks. This is the linearization
+// point for key creation - concurrent Put calls for the same name must
+// result in exactly one success and all others returning ErrKeyStoreExists.
 type KeyStore interface {
 	// Get retrieves a key entry by name.
 	// Returns ErrKeyNotFound if key doesn't exist.
@@ -60,6 +65,8 @@ type KeyStore interface {
 
 	// Put stores a key entry.
 	// Returns ErrKeyExists if key already exists and overwrite is false.
+	// INVARIANT: Put with overwrite=false MUST be atomic with respect to
+	// existence check. This is the linearization point for key creation.
 	// Complexity: Implementation dependent.
 	Put(entry *KeyEntry, overwrite bool) error
 
