@@ -184,6 +184,50 @@ func TestSecp256r1KeyFromBytes(t *testing.T) {
 	}
 }
 
+// TestSecp256r1_DeterministicSigning verifies that secp256r1 signatures are
+// deterministic due to RFC 6979 nonce generation.
+//
+// This test complements TestSecp256k1_DeterministicSigning in keys_test.go.
+// Both curves now use RFC 6979 for deterministic signing, ensuring identical
+// signatures for the same key/message pair.
+//
+// Note: Issue #164 originally requested a non-determinism test, but PR #165
+// implemented RFC 6979 for secp256r1. This test verifies the current behavior.
+func TestSecp256r1_DeterministicSigning(t *testing.T) {
+	// Use deterministic key from seed for reproducibility
+	seed := sha256.Sum256([]byte("test-secp256r1-determinism"))
+	key, err := PrivateKeyFromBytes(AlgorithmSecp256r1, seed[:])
+	if err != nil {
+		t.Fatalf("PrivateKeyFromBytes failed: %v", err)
+	}
+
+	message := []byte("test message")
+
+	// Sign multiple times
+	sig1, err := key.Sign(message)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+	sig2, err := key.Sign(message)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+
+	// Signatures should be identical (RFC 6979 deterministic nonce)
+	if hex.EncodeToString(sig1) != hex.EncodeToString(sig2) {
+		t.Errorf("secp256r1 signatures should be deterministic (RFC 6979)\nsig1: %s\nsig2: %s",
+			hex.EncodeToString(sig1), hex.EncodeToString(sig2))
+	}
+
+	// Verify signatures are valid
+	if !key.PublicKey().Verify(message, sig1) {
+		t.Error("sig1 verification failed")
+	}
+	if !key.PublicKey().Verify(message, sig2) {
+		t.Error("sig2 verification failed")
+	}
+}
+
 func TestSecp256k1PublicKeyFromBytes(t *testing.T) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256k1)
 	if err != nil {
