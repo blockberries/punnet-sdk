@@ -203,12 +203,22 @@ func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 
 // Zeroize clears the private key scalar.
 //
-// Note: Go's big.Int.SetInt64(0) sets the value to zero but does not securely
-// overwrite the underlying byte buffer. This is a known limitation of big.Int.
-// For secp256k1, the dcrd library's Zero() method handles this properly.
-// In practice, Go's garbage collector may retain the original bytes in memory.
+// WARNING: Due to Go's big.Int implementation, complete memory erasure cannot
+// be guaranteed. The big.Int.SetInt64(0) call clears the semantic value, but
+// the internal buffer containing the original key bytes may persist in memory
+// until garbage collected. Additionally, big.Int.Bytes() returns a new slice
+// allocation, so zeroing that copy does not affect the original representation.
+//
+// This is a known limitation of Go's math/big package. For secp256k1, the dcrd
+// library provides proper zeroization via its Zero() method.
+//
+// For high-security contexts requiring guaranteed memory clearing, consider:
+//   - Process isolation (separate process for key material that terminates after use)
+//   - Hardware security modules (HSMs) that manage keys in secure hardware
+//   - Using secp256k1 which has proper zeroization via the dcrd library
+//   - Languages with explicit memory control (Rust, C with explicit memset_s)
 func (k *secp256r1PrivateKey) Zeroize() {
-	if k.key.D != nil {
+	if k.key != nil && k.key.D != nil {
 		k.key.D.SetInt64(0)
 	}
 }
