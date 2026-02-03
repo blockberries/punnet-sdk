@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add SignDoc migration guide documenting transition from binary to JSON signing (#22)
+  - Migration overview and rationale (human auditability, hardware wallet support)
+  - Breaking changes and version transition plan
+  - Client and validator migration guides with code examples
+  - API changes and troubleshooting documentation
+  - See `docs/migration/SIGNDOC_MIGRATION.md`
 - Add `CachingKeyStore` read-through caching wrapper for `EncryptedKeyStore` backends (#138)
   - LRU-based eviction with configurable cache capacity
   - Write-through semantics for consistency

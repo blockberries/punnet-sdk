@@ -331,6 +331,8 @@ golangci-lint run
 ### SignDoc Security and Deprecation Logging
 Messages should implement `SignDocSerializable` to bind signatures to full message content. Messages that don't implement this interface fall back to signers-only mode, which is a security weakness.
 
+> **Migration Guide**: For detailed documentation on migrating from binary Cramberry signing to JSON-based SignDoc signing, see [`docs/migration/SIGNDOC_MIGRATION.md`](docs/migration/SIGNDOC_MIGRATION.md).
+
 **Deprecation Logging**: The SDK logs rate-limited warnings when messages use the signers-only fallback. This helps identify messages that need migration to `SignDocSerializable`.
 
 ```go
