@@ -203,7 +203,10 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 	}
 
 	// 1. Reconstruct SignDoc from transaction fields (single construction)
-	signDoc := tx.ToSignDoc(chainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(chainID, account.Nonce)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidTransaction, err)
+	}
 
 	// 2. Serialize to JSON (json1)
 	json1, err := signDoc.ToJSON()
@@ -249,61 +252,77 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 // state dependency. Numeric conversions use strconv.FormatUint which is deterministic.
 // Message ordering is preserved (no sorting). Coin ordering in Fee.Amount is preserved.
 //
-// TODO(follow-up): The current message serialization only includes signers, not full message data.
-// This is architecturally problematic because:
-// 1. Information loss - actual message content isn't in the SignDoc
-// 2. Future compatibility - when messages have fields beyond signers, this breaks
+// MESSAGE SERIALIZATION:
+// - If a message implements SignDocSerializable, its SignDocData() is used (full content).
+// - Otherwise, only signers are included (backwards-compatible fallback).
+// See SignDocSerializable interface for rationale and security implications.
 //
-// Recommended fix: Define a SignDocSerializable interface:
-//
-//	type SignDocSerializable interface {
-//	    SignDocData() (json.RawMessage, error)
-//	}
-//
-// And implement it on Message types or extract full message data.
-// See PR #25 review from Conductor for details.
-func (tx *Transaction) ToSignDoc(chainID string, accountSequence uint64) *SignDoc {
+// Returns an error if message serialization fails.
+func (tx *Transaction) ToSignDoc(chainID string, accountSequence uint64) (*SignDoc, error) {
+	messages, err := convertMessages(tx.Messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert messages: %w", err)
+	}
+
 	signDoc := &SignDoc{
 		Version:         SignDocVersion,
 		ChainID:         chainID,
 		Account:         string(tx.Account),
 		AccountSequence: StringUint64(accountSequence),
-		Messages:        convertMessages(tx.Messages),
+		Messages:        messages,
 		Nonce:           StringUint64(tx.Nonce),
 		Memo:            tx.Memo,
 		Fee:             convertFee(tx.Fee),
 		FeeSlippage:     convertRatio(tx.FeeSlippage),
 	}
 
-	return signDoc
+	return signDoc, nil
 }
 
 // convertMessages converts a slice of Message to SignDocMessage format.
 //
 // INVARIANT: Message ordering is preserved.
-// INVARIANT: Each message's Type() and GetSigners() are captured in the SignDocMessage.
+// INVARIANT: Each message's Type() is captured in the SignDocMessage.
+// INVARIANT: If a message implements SignDocSerializable, its full canonical data is used.
+// INVARIANT: If a message does not implement SignDocSerializable, only signers are included
 //
-// TODO(follow-up): This only serializes signers. Full message content should be
-// included for proper signature binding. The json.Marshal error is silently
-// ignored here which is not ideal.
-func convertMessages(msgs []Message) []SignDocMessage {
+//	(backwards-compatible fallback behavior).
+//
+// Returns an error if any message's SignDocData() fails or if JSON marshaling fails.
+func convertMessages(msgs []Message) ([]SignDocMessage, error) {
 	if msgs == nil {
-		return make([]SignDocMessage, 0)
+		return make([]SignDocMessage, 0), nil
 	}
 
 	result := make([]SignDocMessage, len(msgs))
 	for i, msg := range msgs {
-		// TODO(follow-up): This only serializes signers. Full message content should be
-		// included for proper signature binding.
-		msgData, _ := json.Marshal(map[string]interface{}{
-			"signers": msg.GetSigners(),
-		})
+		var msgData json.RawMessage
+		var err error
+
+		// Check if message implements SignDocSerializable for full content
+		if serializable, ok := msg.(SignDocSerializable); ok {
+			msgData, err = serializable.SignDocData()
+			if err != nil {
+				return nil, fmt.Errorf("message %d SignDocData failed: %w", i, err)
+			}
+		} else {
+			// Fallback: only include signers (backwards-compatible)
+			// SECURITY NOTE: This fallback loses message content. Implementations
+			// should migrate to SignDocSerializable for stronger signature binding.
+			msgData, err = json.Marshal(map[string]interface{}{
+				"signers": msg.GetSigners(),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("message %d signers serialization failed: %w", i, err)
+			}
+		}
+
 		result[i] = SignDocMessage{
 			Type: msg.Type(),
 			Data: msgData,
 		}
 	}
-	return result
+	return result, nil
 }
 
 // convertFee converts a Fee to SignDocFee format.
@@ -350,7 +369,10 @@ func convertRatio(ratio Ratio) SignDocRatio {
 // INVARIANT: If this returns nil, json1 == json2 byte-for-byte.
 func (tx *Transaction) ValidateSignDocRoundtrip(chainID string, accountSequence uint64) error {
 	// Create SignDoc from transaction
-	signDoc := tx.ToSignDoc(chainID, accountSequence)
+	signDoc, err := tx.ToSignDoc(chainID, accountSequence)
+	if err != nil {
+		return fmt.Errorf("%w: SignDoc creation failed: %v", ErrSignDocMismatch, err)
+	}
 
 	// Serialize to JSON (json1)
 	json1, err := signDoc.ToJSON()

@@ -32,7 +32,8 @@ func TestTransaction_ToSignDoc(t *testing.T) {
 		Memo:     "test memo",
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 42)
+	signDoc, err := tx.ToSignDoc("test-chain", 42)
+	require.NoError(t, err)
 
 	assert.Equal(t, SignDocVersion, signDoc.Version)
 	assert.Equal(t, "test-chain", signDoc.ChainID)
@@ -93,7 +94,8 @@ func TestTransaction_VerifyAuthorization_Valid(t *testing.T) {
 	}
 
 	// Get sign bytes (hash of SignDoc)
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 
@@ -143,7 +145,8 @@ func TestTransaction_VerifyAuthorization_InvalidNonce(t *testing.T) {
 		Nonce:    1, // Transaction has wrong nonce
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 	signBytes, _ := signDoc.GetSignBytes()
 	sig := ed25519.Sign(priv, signBytes)
 
@@ -187,7 +190,8 @@ func TestTransaction_VerifyAuthorization_InvalidSignature(t *testing.T) {
 		Nonce:    1,
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 	signBytes, _ := signDoc.GetSignBytes()
 
 	// Sign with wrong key
@@ -436,7 +440,8 @@ func TestSignDocReconstructionSecurity(t *testing.T) {
 	}
 
 	// Sign with correct chain ID
-	signDoc := tx.ToSignDoc("correct-chain", 1)
+	signDoc, err := tx.ToSignDoc("correct-chain", 1)
+	require.NoError(t, err)
 	signBytes, _ := signDoc.GetSignBytes()
 	sig := ed25519.Sign(priv, signBytes)
 
@@ -487,7 +492,8 @@ func TestMultipleSignatures(t *testing.T) {
 		Nonce:    1,
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 	signBytes, _ := signDoc.GetSignBytes()
 
 	sig1 := ed25519.Sign(priv1, signBytes)
@@ -502,7 +508,7 @@ func TestMultipleSignatures(t *testing.T) {
 	}
 
 	getter := newMockAccountGetter()
-	err := tx.VerifyAuthorization("test-chain", account, getter)
+	err = tx.VerifyAuthorization("test-chain", account, getter)
 	assert.NoError(t, err)
 }
 
@@ -536,7 +542,8 @@ func TestInsufficientSignatures(t *testing.T) {
 		Nonce:    1,
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 	signBytes, _ := signDoc.GetSignBytes()
 
 	// Only one signature provided
@@ -550,7 +557,7 @@ func TestInsufficientSignatures(t *testing.T) {
 	}
 
 	getter := newMockAccountGetter()
-	err := tx.VerifyAuthorization("test-chain", account, getter)
+	err = tx.VerifyAuthorization("test-chain", account, getter)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrInsufficientWeight)
 }
@@ -606,7 +613,8 @@ func BenchmarkVerifyAuthorization(b *testing.B) {
 		Memo:     "benchmark transaction",
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(b, err)
 	signBytes, _ := signDoc.GetSignBytes()
 	sig := ed25519.Sign(priv, signBytes)
 
@@ -657,7 +665,8 @@ func BenchmarkVerifyAuthorization_MultiSig(b *testing.B) {
 		Nonce:    1,
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(b, err)
 	signBytes, _ := signDoc.GetSignBytes()
 
 	sig1 := ed25519.Sign(priv1, signBytes)
@@ -714,7 +723,8 @@ func BenchmarkVerifyAuthorization_LargeMessages(b *testing.B) {
 		Memo:     "benchmark with many messages",
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(b, err)
 	signBytes, _ := signDoc.GetSignBytes()
 	sig := ed25519.Sign(priv, signBytes)
 

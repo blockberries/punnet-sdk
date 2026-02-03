@@ -171,7 +171,8 @@ func TestSingleSignatureFlow_BasicSuccess(t *testing.T) {
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 
 	// Get sign bytes using SignDoc (proper cross-chain replay protection)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 
@@ -215,7 +216,8 @@ func TestSingleSignatureFlow_MultipleMessagesInTransaction(t *testing.T) {
 		&testMessage{signer: "alice", data: "message 3"},
 	}
 	tx := types.NewTransaction("alice", 0, messages, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 
@@ -236,7 +238,8 @@ func TestSingleSignatureFlow_WithMemo(t *testing.T) {
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 	tx.Memo = "payment for services"
 
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
@@ -453,7 +456,8 @@ func TestNegative_WrongNonce(t *testing.T) {
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil) // Wrong nonce: 0 instead of 5
 
 	// Sign with wrong nonce (tx.Nonce is 0, but we need account.Nonce for SignDoc)
-	signDoc := tx.ToSignDoc(testChainID, tx.Nonce) // Deliberately using tx.Nonce
+	signDoc, err := tx.ToSignDoc(testChainID, tx.Nonce)
+	require.NoError(t, err) // Deliberately using tx.Nonce
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
@@ -474,7 +478,8 @@ func TestNegative_TamperedTransaction_ModifiedAccount(t *testing.T) {
 	// Alice signs a transaction
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
@@ -505,7 +510,8 @@ func TestNegative_TamperedTransaction_ModifiedMemo(t *testing.T) {
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 	tx.Memo = "original memo"
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
@@ -743,7 +749,8 @@ func TestRoundtrip_JSONSerialization(t *testing.T) {
 	// Create and sign
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
@@ -836,7 +843,8 @@ func TestRoundtrip_EmptyMemo(t *testing.T) {
 	// Transaction without memo
 	msg := &testMessage{signer: "alice", data: "no memo"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(testChainID, account.Nonce)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
