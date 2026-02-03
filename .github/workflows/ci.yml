@@ -69,7 +69,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           # v2.8.0 has official binaries built with Go 1.25, so binary mode works now
           # (Previously used goinstall mode as workaround for v1.x Go 1.25 incompatibility)
