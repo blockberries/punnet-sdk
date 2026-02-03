@@ -3,13 +3,13 @@ package types
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/blockberries/cramberry/pkg/cramberry"
 )
 
 // SignDocVersion is the current version of the SignDoc format.
@@ -217,19 +217,16 @@ func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 	})
 }
 
-// ToJSON serializes the SignDoc to canonical JSON bytes using Cramberry-style
-// deterministic serialization.
+// ToJSON serializes the SignDoc to canonical JSON bytes using Cramberry's
+// deterministic serialization functions.
 //
 // INVARIANT: Calling ToJSON() twice on an unmodified SignDoc returns identical bytes.
 // INVARIANT: Output is compact (no whitespace between elements).
 // INVARIANT: All fields are included, even if empty/zero-valued.
 // INVARIANT: Numeric values are serialized as quoted strings (JavaScript BigInt safety).
-// INVARIANT: Binary data is encoded as standard Base64 (RFC 4648).
 //
-// IMPLEMENTATION: Manual JSON construction following Cramberry's deterministic patterns:
-// - escapeJSONString for safe string escaping with proper Unicode handling
-// - strconv.FormatUint for numeric values (already string via StringUint64)
-// - base64.StdEncoding for binary data
+// IMPLEMENTATION: Uses Cramberry library's deterministic JSON helpers:
+// - cramberry.EscapeJSONString for safe string escaping with proper Unicode handling
 // - Field order follows struct declaration order for reproducibility
 // - No reliance on map iteration (which is non-deterministic in Go)
 func (sd *SignDoc) ToJSON() ([]byte, error) {
@@ -239,16 +236,16 @@ func (sd *SignDoc) ToJSON() ([]byte, error) {
 	b.Grow(256)
 
 	b.WriteString(`{"version":`)
-	writeJSONString(&b, sd.Version)
+	b.WriteString(cramberry.EscapeJSONString(sd.Version))
 
 	b.WriteString(`,"chain_id":`)
-	writeJSONString(&b, sd.ChainID)
+	b.WriteString(cramberry.EscapeJSONString(sd.ChainID))
 
 	b.WriteString(`,"account":`)
-	writeJSONString(&b, sd.Account)
+	b.WriteString(cramberry.EscapeJSONString(sd.Account))
 
 	b.WriteString(`,"account_sequence":`)
-	writeJSONString(&b, strconv.FormatUint(uint64(sd.AccountSequence), 10))
+	b.WriteString(cramberry.EscapeJSONString(strconv.FormatUint(uint64(sd.AccountSequence), 10)))
 
 	b.WriteString(`,"messages":`)
 	if err := sd.writeMessagesJSON(&b); err != nil {
@@ -256,11 +253,11 @@ func (sd *SignDoc) ToJSON() ([]byte, error) {
 	}
 
 	b.WriteString(`,"nonce":`)
-	writeJSONString(&b, strconv.FormatUint(uint64(sd.Nonce), 10))
+	b.WriteString(cramberry.EscapeJSONString(strconv.FormatUint(uint64(sd.Nonce), 10)))
 
 	// Memo is always included, even if empty (no omitempty behavior)
 	b.WriteString(`,"memo":`)
-	writeJSONString(&b, sd.Memo)
+	b.WriteString(cramberry.EscapeJSONString(sd.Memo))
 
 	b.WriteString(`,"fee":`)
 	sd.Fee.writeJSON(&b)
@@ -281,7 +278,7 @@ func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
 			b.WriteString(`,`)
 		}
 		b.WriteString(`{"type":`)
-		writeJSONString(b, msg.Type)
+		b.WriteString(cramberry.EscapeJSONString(msg.Type))
 		b.WriteString(`,"data":`)
 		// Data is already canonical JSON (json.RawMessage), write it directly
 		if msg.Data == nil {
@@ -303,78 +300,31 @@ func (f *SignDocFee) writeJSON(b *strings.Builder) {
 			b.WriteString(`,`)
 		}
 		b.WriteString(`{"denom":`)
-		writeJSONString(b, coin.Denom)
+		b.WriteString(cramberry.EscapeJSONString(coin.Denom))
 		b.WriteString(`,"amount":`)
-		writeJSONString(b, coin.Amount)
+		b.WriteString(cramberry.EscapeJSONString(coin.Amount))
 		b.WriteString(`}`)
 	}
 	b.WriteString(`],"gas_limit":`)
-	writeJSONString(b, f.GasLimit)
+	b.WriteString(cramberry.EscapeJSONString(f.GasLimit))
 	b.WriteString(`}`)
 }
 
 // writeJSON writes the SignDocRatio to the builder in deterministic JSON format.
 func (r *SignDocRatio) writeJSON(b *strings.Builder) {
 	b.WriteString(`{"numerator":`)
-	writeJSONString(b, r.Numerator)
+	b.WriteString(cramberry.EscapeJSONString(r.Numerator))
 	b.WriteString(`,"denominator":`)
-	writeJSONString(b, r.Denominator)
+	b.WriteString(cramberry.EscapeJSONString(r.Denominator))
 	b.WriteString(`}`)
 }
 
-// writeJSONString writes a JSON-escaped string to the builder.
-// This follows Cramberry's escaping rules for deterministic output:
-// - Control characters (0x00-0x1F) are escaped as \uXXXX
-// - Backslash and double-quote are escaped with backslash
-// - All other valid UTF-8 is written as-is
-//
-// INVARIANT: Same input always produces identical output bytes.
-func writeJSONString(b *strings.Builder, s string) {
-	b.WriteByte('"')
-	for i := 0; i < len(s); {
-		c := s[i]
-		switch {
-		case c == '"':
-			b.WriteString(`\"`)
-			i++
-		case c == '\\':
-			b.WriteString(`\\`)
-			i++
-		case c < 0x20:
-			// Control characters must be escaped as \uXXXX
-			b.WriteString(`\u00`)
-			b.WriteByte(hexDigits[c>>4])
-			b.WriteByte(hexDigits[c&0x0F])
-			i++
-		case c < utf8.RuneSelf:
-			// ASCII printable character
-			b.WriteByte(c)
-			i++
-		default:
-			// Multi-byte UTF-8 sequence - write as-is
-			r, size := utf8.DecodeRuneInString(s[i:])
-			if r == utf8.RuneError && size == 1 {
-				// Invalid UTF-8; escape as replacement character
-				b.WriteString(`\uFFFD`)
-				i++
-			} else {
-				b.WriteString(s[i : i+size])
-				i += size
-			}
-		}
-	}
-	b.WriteByte('"')
-}
-
-// hexDigits is used for encoding control characters in JSON strings.
-var hexDigits = [16]byte{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}
-
 // EncodeBase64 encodes binary data as standard Base64 (RFC 4648).
-// This is used for binary fields in messages when serializing to JSON.
+// This is a convenience wrapper around Cramberry's EncodeBase64 function.
 //
 // INVARIANT: Same input always produces identical output.
 func EncodeBase64(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
+	return cramberry.EncodeBase64(data)
 }
 
 // GetSignBytes returns the bytes that should be signed.

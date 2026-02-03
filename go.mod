@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	cosmossdk.io/log v1.2.0
+	github.com/blockberries/cramberry v1.5.6-0.20260202163518-183adeee99b6
 	github.com/cosmos/cosmos-db v1.0.0
 	github.com/cosmos/ics23/go v0.10.0
 	github.com/stretchr/testify v1.10.0
@@ -36,9 +37,7 @@ require (
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 // indirect
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.11.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
