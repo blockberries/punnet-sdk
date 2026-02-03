@@ -728,3 +728,270 @@ func TestPrivateKeyZeroize(t *testing.T) {
 		}
 	}
 }
+
+// Close() tests
+
+func TestKeyringClose(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create some keys
+	_, err := kr.NewKey("key1", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+	_, err = kr.NewKey("key2", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Close should succeed
+	err = kr.Close()
+	if err != nil {
+		t.Errorf("Close() failed: %v", err)
+	}
+
+	// Verify store is now empty (keys deleted)
+	if store.Len() != 0 {
+		t.Errorf("expected store to be empty after close, got %d keys", store.Len())
+	}
+}
+
+func TestKeyringCloseIdempotent(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create a key
+	_, err := kr.NewKey("test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// First close
+	err = kr.Close()
+	if err != nil {
+		t.Errorf("first Close() failed: %v", err)
+	}
+
+	// Second close should be a no-op and return nil
+	err = kr.Close()
+	if err != nil {
+		t.Errorf("second Close() should return nil, got: %v", err)
+	}
+}
+
+func TestKeyringOperationsAfterClose(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create a key before close
+	_, err := kr.NewKey("before-close", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Close the keyring
+	if err := kr.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// All operations should return ErrKeyringClosed
+
+	// NewKey
+	_, err = kr.NewKey("after-close", AlgorithmEd25519)
+	if err != ErrKeyringClosed {
+		t.Errorf("NewKey after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// ImportKey
+	_, priv, _ := generateTestKey(t)
+	_, err = kr.ImportKey("import-after-close", priv, AlgorithmEd25519)
+	if err != ErrKeyringClosed {
+		t.Errorf("ImportKey after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// ExportKey
+	_, err = kr.ExportKey("before-close", "")
+	if err != ErrKeyringClosed {
+		t.Errorf("ExportKey after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// GetKey
+	_, err = kr.GetKey("before-close")
+	if err != ErrKeyringClosed {
+		t.Errorf("GetKey after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// ListKeys
+	_, err = kr.ListKeys()
+	if err != ErrKeyringClosed {
+		t.Errorf("ListKeys after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// DeleteKey
+	err = kr.DeleteKey("before-close")
+	if err != ErrKeyringClosed {
+		t.Errorf("DeleteKey after close: expected ErrKeyringClosed, got %v", err)
+	}
+
+	// Sign
+	_, err = kr.Sign("before-close", []byte("data"))
+	if err != ErrKeyringClosed {
+		t.Errorf("Sign after close: expected ErrKeyringClosed, got %v", err)
+	}
+}
+
+// generateTestKey is a helper for tests
+func generateTestKey(t *testing.T) ([]byte, []byte, error) {
+	t.Helper()
+	privKey, err := GeneratePrivateKey(AlgorithmEd25519)
+	if err != nil {
+		return nil, nil, err
+	}
+	return privKey.PublicKey().Bytes(), privKey.Bytes(), nil
+}
+
+// mockFailingStore wraps a store and fails Delete for specific keys
+type mockFailingStore struct {
+	SimpleKeyStore
+	failDelete map[string]bool
+}
+
+func (m *mockFailingStore) Delete(name string) error {
+	if m.failDelete[name] {
+		return fmt.Errorf("simulated delete failure for %s", name)
+	}
+	return m.SimpleKeyStore.Delete(name)
+}
+
+func TestKeyringClosePartialFailure(t *testing.T) {
+	underlying := NewMemoryStore()
+	store := &mockFailingStore{
+		SimpleKeyStore: underlying,
+		failDelete:     make(map[string]bool),
+	}
+	kr := NewKeyring(store)
+
+	// Create keys
+	_, err := kr.NewKey("key1", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key1 failed: %v", err)
+	}
+	_, err = kr.NewKey("key2", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key2 failed: %v", err)
+	}
+	_, err = kr.NewKey("key3", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key3 failed: %v", err)
+	}
+
+	// Make key2 deletion fail
+	store.failDelete["key2"] = true
+
+	// Close should return an error but still mark keyring as closed
+	err = kr.Close()
+	if err == nil {
+		t.Error("Close() should return error when delete fails")
+	}
+
+	// Error should mention the failure
+	errStr := err.Error()
+	if !contains(errStr, "key2") || !contains(errStr, "failed to delete") {
+		t.Errorf("error should mention failed key, got: %v", err)
+	}
+
+	// Keyring should still be closed
+	_, err = kr.NewKey("new-key", AlgorithmEd25519)
+	if err != ErrKeyringClosed {
+		t.Errorf("expected ErrKeyringClosed after partial failure close, got: %v", err)
+	}
+
+	// Subsequent close should be no-op (returns nil)
+	err = kr.Close()
+	if err != nil {
+		t.Errorf("second Close() after partial failure should return nil, got: %v", err)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && searchSubstring(s, substr)))
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestKeyringCloseZeroizesCache(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create a key and access it to ensure it's cached
+	signer, err := kr.NewKey("cached-key", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Get reference to the signer's underlying private key
+	// This is a bit of white-box testing, but important for security
+	basicSigner, ok := signer.(*BasicSigner)
+	if !ok {
+		t.Skip("cannot verify zeroization - signer is not BasicSigner")
+	}
+
+	// Get the key bytes before close
+	keyBytesBefore := basicSigner.privateKey.Bytes()
+	nonZero := false
+	for _, b := range keyBytesBefore {
+		if b != 0 {
+			nonZero = true
+			break
+		}
+	}
+	if !nonZero {
+		t.Fatal("private key should not be all zeros before close")
+	}
+
+	// Close
+	if err := kr.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// After close, the cached signer's private key should be zeroized
+	// Note: We check the same bytes reference since Zeroize works in-place
+	allZero := true
+	for _, b := range keyBytesBefore {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if !allZero {
+		t.Error("private key should be zeroized after close")
+	}
+}
+
+func BenchmarkKeyringClose(b *testing.B) {
+	// Benchmark Close() with various numbers of keys
+	for _, numKeys := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprintf("keys=%d", numKeys), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				store := NewMemoryStore()
+				kr := NewKeyring(store)
+				for j := 0; j < numKeys; j++ {
+					_, _ = kr.NewKey(fmt.Sprintf("key-%d", j), AlgorithmEd25519)
+				}
+				b.StartTimer()
+
+				_ = kr.Close()
+			}
+		})
+	}
+}
