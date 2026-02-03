@@ -104,7 +104,8 @@ func TestSignDocDeterminism_FieldOrderIndependence(t *testing.T) {
 // Test serialization with various field values.
 
 func TestSignDocFieldValues_EmptyStringFields(t *testing.T) {
-	// Empty memo should serialize consistently (with omitempty it may be omitted).
+	// Empty memo should serialize consistently.
+	// Per Cramberry determinism rules: all fields are always included, even if empty.
 	sd := NewSignDoc("chain", 1, "alice", 1, "")
 	sd.AddMessage("/msg", json.RawMessage(`{}`))
 
@@ -117,9 +118,9 @@ func TestSignDocFieldValues_EmptyStringFields(t *testing.T) {
 
 	assert.Equal(t, json1, json2)
 
-	// Verify memo is actually omitted (due to omitempty tag)
-	assert.NotContains(t, string(json1), `"memo":""`,
-		"empty memo should be omitted due to omitempty")
+	// Verify memo is included even when empty (Cramberry deterministic JSON always includes all fields)
+	assert.Contains(t, string(json1), `"memo":""`,
+		"empty memo should be included for deterministic serialization")
 }
 
 func TestSignDocFieldValues_ZeroNumericFields(t *testing.T) {
@@ -626,6 +627,8 @@ type SignDocFixture struct {
 }
 
 func getSignDocFixtures() []SignDocFixture {
+	// NOTE: All fixtures include "memo" field even when empty, per Cramberry deterministic
+	// serialization rules. This ensures byte-identical output across all implementations.
 	return []SignDocFixture{
 		{
 			Name: "basic_transfer",
@@ -634,7 +637,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/punnet.bank.v1.MsgSend", json.RawMessage(`{"from":"alice","to":"bob","amount":"100"}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"punnet-1","account":"alice","account_sequence":"1","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"from":"alice","to":"bob","amount":"100"}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
+			ExpectedJSON: `{"version":"1","chain_id":"punnet-1","account":"alice","account_sequence":"1","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"from":"alice","to":"bob","amount":"100"}}],"nonce":"1","memo":"","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "with_memo",
@@ -652,7 +655,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/m", json.RawMessage(`{}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"user","account_sequence":"0","messages":[{"type":"/m","data":{}}],"nonce":"0","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
+			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"user","account_sequence":"0","messages":[{"type":"/m","data":{}}],"nonce":"0","memo":"","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "multiple_messages",
@@ -662,7 +665,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/b", json.RawMessage(`{"y":2}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"alice","account_sequence":"1","messages":[{"type":"/a","data":{"x":1}},{"type":"/b","data":{"y":2}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
+			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"alice","account_sequence":"1","messages":[{"type":"/a","data":{"x":1}},{"type":"/b","data":{"y":2}}],"nonce":"1","memo":"","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "with_fee",
