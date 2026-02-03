@@ -15,6 +15,9 @@ import (
 // Test Utilities and Helpers
 // =============================================================================
 
+// testChainID is the chain ID used for SignDoc-based verification tests
+const testChainID = "test-chain-integration"
+
 // testKeyPair holds an Ed25519 key pair for testing
 type testKeyPair struct {
 	pub  ed25519.PublicKey
@@ -41,9 +44,6 @@ func (kp *testKeyPair) toSignature(message []byte) types.Signature {
 		Signature: kp.sign(message),
 	}
 }
-
-// testChainID is the chain ID used in integration tests.
-const testChainID = "test-chain"
 
 // signingTestEnv provides test environment for signing tests
 type signingTestEnv struct {

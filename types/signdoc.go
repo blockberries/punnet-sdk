@@ -6,17 +6,108 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 )
 
 // SignDocVersion is the current version of the SignDoc format.
 // Changing this version invalidates all existing signatures.
 const SignDocVersion = "1"
 
+// MaxMessagesPerSignDoc limits the number of messages in a SignDoc.
+// SECURITY: Prevents DoS attacks via memory/CPU exhaustion during serialization
+// and iteration over large message arrays.
+const MaxMessagesPerSignDoc = 256
+
+// MaxMessageDataSize limits the size of each message's data field in bytes.
+// SECURITY: Prevents memory exhaustion from arbitrarily large message payloads.
+// 64KB per message is generous for most use cases while preventing abuse.
+const MaxMessageDataSize = 64 * 1024 // 64KB
+
+// MaxFeeCoins limits the number of coins in a fee.
+// SECURITY: Prevents DoS attacks via iteration over large coin arrays.
+const MaxFeeCoins = 16
+
+// SignDocCoin represents a coin in the SignDoc with string-serialized amount.
+//
+// INVARIANT: Amount MUST be a valid decimal string representation of a non-negative integer.
+// RATIONALE: String serialization ensures JavaScript BigInt compatibility and prevents
+// precision loss for large values that exceed Number.MAX_SAFE_INTEGER (2^53 - 1).
+type SignDocCoin struct {
+	// Denom is the coin denomination (e.g., "stake", "uatom").
+	Denom string `json:"denom"`
+
+	// Amount is the coin amount as a decimal string.
+	// MUST be a non-negative integer in string form (e.g., "1000000").
+	Amount string `json:"amount"`
+}
+
+// SignDocFee represents the transaction fee in the SignDoc.
+//
+// INVARIANT: GasLimit MUST be a valid decimal string representation of a non-negative integer.
+type SignDocFee struct {
+	// Amount is the fee amount as a list of coins.
+	Amount []SignDocCoin `json:"amount"`
+
+	// GasLimit is the maximum gas allowed for this transaction as a decimal string.
+	GasLimit string `json:"gas_limit"`
+}
+
+// SignDocRatio represents a ratio with numerator and denominator.
+//
+// INVARIANT: Both Numerator and Denominator MUST be valid decimal string representations.
+// INVARIANT: Denominator MUST NOT be "0" (division by zero is undefined).
+//
+// This is used for fee slippage tolerance, expressing the maximum acceptable
+// conversion rate deviation as a fraction.
+type SignDocRatio struct {
+	// Numerator is the ratio numerator as a decimal string.
+	Numerator string `json:"numerator"`
+
+	// Denominator is the ratio denominator as a decimal string.
+	// MUST NOT be "0".
+	Denominator string `json:"denominator"`
+}
+
+// StringUint64 is a uint64 that serializes to/from a JSON string.
+//
+// RATIONALE: JavaScript's Number type cannot precisely represent integers
+// larger than 2^53 - 1 (Number.MAX_SAFE_INTEGER). By serializing as strings,
+// we ensure safe handling in JavaScript clients using BigInt.
+//
+// INVARIANT: JSON serialization produces a quoted decimal string (e.g., "12345").
+// INVARIANT: JSON deserialization accepts only quoted decimal strings.
+type StringUint64 uint64
+
+// MarshalJSON implements json.Marshaler for StringUint64.
+func (s StringUint64) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strconv.FormatUint(uint64(s), 10))
+}
+
+// UnmarshalJSON implements json.Unmarshaler for StringUint64.
+func (s *StringUint64) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return fmt.Errorf("StringUint64 must be a quoted string: %w", err)
+	}
+	val, err := strconv.ParseUint(str, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid StringUint64 value %q: %w", str, err)
+	}
+	*s = StringUint64(val)
+	return nil
+}
+
+// Uint64 returns the underlying uint64 value.
+func (s StringUint64) Uint64() uint64 {
+	return uint64(s)
+}
+
 // SignDoc represents the canonical document that is signed for transaction authorization.
 //
 // INVARIANT: Two SignDocs with identical field values MUST produce identical JSON bytes.
 // PROOF SKETCH: We use sorted keys and deterministic serialization (no floats, no maps
-// with non-string keys) to ensure canonical JSON output.
+// with non-string keys) to ensure canonical JSON output. Numeric values are serialized
+// as strings to guarantee determinism across platforms with different numeric precision.
 //
 // INVARIANT: SignDoc reconstruction from a Transaction is deterministic.
 // PROOF SKETCH: All fields are copied directly; no computed or derived values depend
@@ -30,21 +121,28 @@ type SignDoc struct {
 	// SECURITY: Signatures are only valid for the chain specified.
 	ChainID string `json:"chain_id"`
 
-	// AccountSequence is the expected nonce for the signing account.
-	// SECURITY: Prevents replay attacks within the same chain.
-	AccountSequence uint64 `json:"account_sequence"`
-
 	// Account is the account authorizing this transaction.
 	Account string `json:"account"`
+
+	// AccountSequence is the expected nonce for the signing account.
+	// SECURITY: Prevents replay attacks within the same chain.
+	AccountSequence StringUint64 `json:"account_sequence"`
 
 	// Messages are the operations to execute.
 	Messages []SignDocMessage `json:"messages"`
 
 	// Nonce is the transaction nonce (may differ from account sequence in some protocols).
-	Nonce uint64 `json:"nonce"`
+	Nonce StringUint64 `json:"nonce"`
 
 	// Memo is optional transaction metadata.
 	Memo string `json:"memo,omitempty"`
+
+	// Fee is the transaction fee.
+	Fee SignDocFee `json:"fee"`
+
+	// FeeSlippage is the maximum conversion rate slippage tolerance for fee payment.
+	// Expressed as a ratio (e.g., {numerator: "1", denominator: "100"} = 1% slippage).
+	FeeSlippage SignDocRatio `json:"fee_slippage"`
 }
 
 // SignDocMessage represents a message in canonical form for signing.
@@ -58,16 +156,53 @@ type SignDocMessage struct {
 }
 
 // NewSignDoc creates a new SignDoc with the current version.
+//
+// PRECONDITION: chainID is non-empty (cross-chain replay protection).
+// PRECONDITION: account is non-empty.
+// POSTCONDITION: Returned SignDoc has Version = SignDocVersion.
+// POSTCONDITION: Fee and FeeSlippage are zero-valued and must be set separately.
 func NewSignDoc(chainID string, accountSequence uint64, account string, nonce uint64, memo string) *SignDoc {
 	return &SignDoc{
 		Version:         SignDocVersion,
 		ChainID:         chainID,
-		AccountSequence: accountSequence,
+		AccountSequence: StringUint64(accountSequence),
 		Account:         account,
-		Nonce:           nonce,
+		Nonce:           StringUint64(nonce),
 		Memo:            memo,
 		Messages:        make([]SignDocMessage, 0),
+		Fee:             SignDocFee{Amount: make([]SignDocCoin, 0), GasLimit: "0"},
+		FeeSlippage:     SignDocRatio{Numerator: "0", Denominator: "1"},
 	}
+}
+
+// NewSignDocWithFee creates a new SignDoc with the current version and fee configuration.
+//
+// PRECONDITION: chainID is non-empty (cross-chain replay protection).
+// PRECONDITION: account is non-empty.
+// PRECONDITION: fee.GasLimit is a valid decimal string.
+// PRECONDITION: feeSlippage.Denominator is not "0".
+func NewSignDocWithFee(chainID string, accountSequence uint64, account string, nonce uint64, memo string, fee SignDocFee, feeSlippage SignDocRatio) *SignDoc {
+	return &SignDoc{
+		Version:         SignDocVersion,
+		ChainID:         chainID,
+		AccountSequence: StringUint64(accountSequence),
+		Account:         account,
+		Nonce:           StringUint64(nonce),
+		Memo:            memo,
+		Messages:        make([]SignDocMessage, 0),
+		Fee:             fee,
+		FeeSlippage:     feeSlippage,
+	}
+}
+
+// SetFee sets the fee on the SignDoc.
+func (sd *SignDoc) SetFee(fee SignDocFee) {
+	sd.Fee = fee
+}
+
+// SetFeeSlippage sets the fee slippage tolerance on the SignDoc.
+func (sd *SignDoc) SetFeeSlippage(slippage SignDocRatio) {
+	sd.FeeSlippage = slippage
 }
 
 // AddMessage appends a message to the SignDoc.
@@ -106,6 +241,11 @@ func (sd *SignDoc) GetSignBytes() ([]byte, error) {
 }
 
 // ValidateBasic performs stateless validation of the SignDoc.
+//
+// SECURITY: This validation includes bounds checking to prevent DoS attacks:
+// - Maximum message count: MaxMessagesPerSignDoc (256)
+// - Maximum message data size: MaxMessageDataSize (64KB)
+// - Maximum fee coin count: MaxFeeCoins (16)
 func (sd *SignDoc) ValidateBasic() error {
 	if sd.Version != SignDocVersion {
 		return fmt.Errorf("%w: unsupported SignDoc version %q, expected %q",
@@ -124,11 +264,109 @@ func (sd *SignDoc) ValidateBasic() error {
 		return fmt.Errorf("%w: SignDoc must contain at least one message", ErrSignDocMismatch)
 	}
 
-	// Validate each message has a type
+	// SECURITY: Limit message count to prevent DoS via memory/CPU exhaustion
+	if len(sd.Messages) > MaxMessagesPerSignDoc {
+		return fmt.Errorf("%w: too many messages (%d > %d)",
+			ErrSignDocMismatch, len(sd.Messages), MaxMessagesPerSignDoc)
+	}
+
+	// Validate each message
 	for i, msg := range sd.Messages {
 		if msg.Type == "" {
 			return fmt.Errorf("%w: message %d has empty type", ErrSignDocMismatch, i)
 		}
+
+		// SECURITY: Limit message data size to prevent memory exhaustion
+		if len(msg.Data) > MaxMessageDataSize {
+			return fmt.Errorf("%w: message %d data too large (%d > %d)",
+				ErrSignDocMismatch, i, len(msg.Data), MaxMessageDataSize)
+		}
+	}
+
+	// Validate fee
+	if err := sd.Fee.ValidateBasic(); err != nil {
+		return fmt.Errorf("%w: invalid fee: %v", ErrSignDocMismatch, err)
+	}
+
+	// Validate fee slippage
+	if err := sd.FeeSlippage.ValidateBasic(); err != nil {
+		return fmt.Errorf("%w: invalid fee_slippage: %v", ErrSignDocMismatch, err)
+	}
+
+	return nil
+}
+
+// ValidateBasic performs stateless validation of SignDocFee.
+//
+// INVARIANT: GasLimit MUST be a valid non-negative decimal string.
+// INVARIANT: All coins in Amount MUST be valid.
+func (f *SignDocFee) ValidateBasic() error {
+	// Validate gas limit is a valid uint64 string
+	if f.GasLimit == "" {
+		return fmt.Errorf("gas_limit cannot be empty")
+	}
+	if _, err := strconv.ParseUint(f.GasLimit, 10, 64); err != nil {
+		return fmt.Errorf("invalid gas_limit %q: must be a decimal string", f.GasLimit)
+	}
+
+	// SECURITY: Limit number of fee coins to prevent DoS
+	if len(f.Amount) > MaxFeeCoins {
+		return fmt.Errorf("too many fee coins (%d > %d)", len(f.Amount), MaxFeeCoins)
+	}
+
+	// Validate each coin
+	for i, coin := range f.Amount {
+		if err := coin.ValidateBasic(); err != nil {
+			return fmt.Errorf("fee coin %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// ValidateBasic performs stateless validation of SignDocRatio.
+//
+// INVARIANT: Both Numerator and Denominator MUST be valid non-negative decimal strings.
+// INVARIANT: Denominator MUST NOT be "0".
+func (r *SignDocRatio) ValidateBasic() error {
+	if r.Numerator == "" {
+		return fmt.Errorf("numerator cannot be empty")
+	}
+	if _, err := strconv.ParseUint(r.Numerator, 10, 64); err != nil {
+		return fmt.Errorf("invalid numerator %q: must be a decimal string", r.Numerator)
+	}
+
+	if r.Denominator == "" {
+		return fmt.Errorf("denominator cannot be empty")
+	}
+	denom, err := strconv.ParseUint(r.Denominator, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid denominator %q: must be a decimal string", r.Denominator)
+	}
+	if denom == 0 {
+		return fmt.Errorf("denominator cannot be zero")
+	}
+
+	return nil
+}
+
+// ValidateBasic performs stateless validation of SignDocCoin.
+//
+// INVARIANT: Denom MUST be non-empty and at most 64 characters.
+// INVARIANT: Amount MUST be a valid non-negative decimal string.
+func (c *SignDocCoin) ValidateBasic() error {
+	if c.Denom == "" {
+		return fmt.Errorf("denom cannot be empty")
+	}
+	if len(c.Denom) > 64 {
+		return fmt.Errorf("denom too long (%d > 64)", len(c.Denom))
+	}
+
+	if c.Amount == "" {
+		return fmt.Errorf("amount cannot be empty")
+	}
+	if _, err := strconv.ParseUint(c.Amount, 10, 64); err != nil {
+		return fmt.Errorf("invalid amount %q: must be a decimal string", c.Amount)
 	}
 
 	return nil

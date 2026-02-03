@@ -123,17 +123,17 @@ func TestSignDocFieldValues_EmptyStringFields(t *testing.T) {
 }
 
 func TestSignDocFieldValues_ZeroNumericFields(t *testing.T) {
-	// Zero values for uint64 fields must serialize consistently.
+	// Zero values for uint64 fields must serialize consistently as strings.
 	sd := NewSignDoc("chain", 0, "alice", 0, "")
 	sd.AddMessage("/msg", json.RawMessage(`{}`))
 
 	jsonBytes, err := sd.ToJSON()
 	require.NoError(t, err)
 
-	// Verify zeros are serialized (not omitted)
+	// Verify zeros are serialized as strings (not omitted)
 	jsonStr := string(jsonBytes)
-	assert.Contains(t, jsonStr, `"account_sequence":0`)
-	assert.Contains(t, jsonStr, `"nonce":0`)
+	assert.Contains(t, jsonStr, `"account_sequence":"0"`)
+	assert.Contains(t, jsonStr, `"nonce":"0"`)
 
 	// Verify determinism
 	json2, err := sd.ToJSON()
@@ -142,7 +142,7 @@ func TestSignDocFieldValues_ZeroNumericFields(t *testing.T) {
 }
 
 func TestSignDocFieldValues_MaxUint64(t *testing.T) {
-	// Maximum uint64 values must serialize correctly.
+	// Maximum uint64 values must serialize correctly as strings.
 	sd := NewSignDoc("chain", math.MaxUint64, "alice", math.MaxUint64, "")
 	sd.AddMessage("/msg", json.RawMessage(`{}`))
 
@@ -153,8 +153,8 @@ func TestSignDocFieldValues_MaxUint64(t *testing.T) {
 	parsed, err := ParseSignDoc(jsonBytes)
 	require.NoError(t, err)
 
-	assert.Equal(t, uint64(math.MaxUint64), parsed.AccountSequence)
-	assert.Equal(t, uint64(math.MaxUint64), parsed.Nonce)
+	assert.Equal(t, StringUint64(math.MaxUint64), parsed.AccountSequence)
+	assert.Equal(t, StringUint64(math.MaxUint64), parsed.Nonce)
 
 	// Verify roundtrip determinism
 	json2, err := parsed.ToJSON()
@@ -200,8 +200,8 @@ func TestSignDocFieldValues_UnicodeStrings(t *testing.T) {
 func TestSignDocFieldValues_SpecialCharactersInMemo(t *testing.T) {
 	// Special characters that need JSON escaping must be handled correctly.
 	testCases := []struct {
-		name  string
-		memo  string
+		name string
+		memo string
 	}{
 		{"quotes", `memo with "quotes"`},
 		{"backslash", `path\to\file`},
@@ -246,6 +246,8 @@ func TestSignDocFieldValues_EmptyArray(t *testing.T) {
 		Nonce:           1,
 		Memo:            "",
 		Messages:        []SignDocMessage{},
+		Fee:             SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+		FeeSlippage:     SignDocRatio{Numerator: "0", Denominator: "1"},
 	}
 
 	json1, err := sd.ToJSON()
@@ -328,7 +330,7 @@ func TestSignDocMessages_DifferentMessageTypes(t *testing.T) {
 		"/punnet.staking.v1.MsgDelegate",
 		"/punnet.staking.v1.MsgUndelegate",
 		"/punnet.gov.v1.MsgVote",
-		"/cosmos.bank.v1beta1.MsgSend", // Cosmos-style
+		"/cosmos.bank.v1beta1.MsgSend",              // Cosmos-style
 		"/ibc.applications.transfer.v1.MsgTransfer", // IBC-style
 	}
 
@@ -539,6 +541,11 @@ func TestSignDocEdgeCases_AllFieldsPopulated(t *testing.T) {
 				Data: json.RawMessage(`{"delegator":"alice","validator":"punnetvaloper1xyz","amount":{"denom":"uatom","amount":"5000"}}`),
 			},
 		},
+		Fee: SignDocFee{
+			Amount:   []SignDocCoin{{Denom: "uatom", Amount: "1000"}},
+			GasLimit: "200000",
+		},
+		FeeSlippage: SignDocRatio{Numerator: "1", Denominator: "100"},
 	}
 
 	json1, err := sd.ToJSON()
@@ -555,6 +562,8 @@ func TestSignDocEdgeCases_AllFieldsPopulated(t *testing.T) {
 	assert.Equal(t, sd.Nonce, parsed.Nonce)
 	assert.Equal(t, sd.Memo, parsed.Memo)
 	assert.Len(t, parsed.Messages, 2)
+	assert.Equal(t, sd.Fee, parsed.Fee)
+	assert.Equal(t, sd.FeeSlippage, parsed.FeeSlippage)
 
 	json2, err := parsed.ToJSON()
 	require.NoError(t, err)
@@ -625,7 +634,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/punnet.bank.v1.MsgSend", json.RawMessage(`{"from":"alice","to":"bob","amount":"100"}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"punnet-1","account_sequence":1,"account":"alice","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"from":"alice","to":"bob","amount":"100"}}],"nonce":1}`,
+			ExpectedJSON: `{"version":"1","chain_id":"punnet-1","account":"alice","account_sequence":"1","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"from":"alice","to":"bob","amount":"100"}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "with_memo",
@@ -634,7 +643,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/msg", json.RawMessage(`{}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"test-chain","account_sequence":42,"account":"bob","messages":[{"type":"/msg","data":{}}],"nonce":10,"memo":"hello world"}`,
+			ExpectedJSON: `{"version":"1","chain_id":"test-chain","account":"bob","account_sequence":"42","messages":[{"type":"/msg","data":{}}],"nonce":"10","memo":"hello world","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "zero_values",
@@ -643,7 +652,7 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/m", json.RawMessage(`{}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"chain","account_sequence":0,"account":"user","messages":[{"type":"/m","data":{}}],"nonce":0}`,
+			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"user","account_sequence":"0","messages":[{"type":"/m","data":{}}],"nonce":"0","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
 		},
 		{
 			Name: "multiple_messages",
@@ -653,7 +662,22 @@ func getSignDocFixtures() []SignDocFixture {
 				sd.AddMessage("/b", json.RawMessage(`{"y":2}`))
 				return sd
 			}(),
-			ExpectedJSON: `{"version":"1","chain_id":"chain","account_sequence":1,"account":"alice","messages":[{"type":"/a","data":{"x":1}},{"type":"/b","data":{"y":2}}],"nonce":1}`,
+			ExpectedJSON: `{"version":"1","chain_id":"chain","account":"alice","account_sequence":"1","messages":[{"type":"/a","data":{"x":1}},{"type":"/b","data":{"y":2}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`,
+		},
+		{
+			Name: "with_fee",
+			SignDoc: func() *SignDoc {
+				sd := NewSignDocWithFee("punnet-1", 5, "alice", 5, "fee test",
+					SignDocFee{
+						Amount:   []SignDocCoin{{Denom: "uatom", Amount: "5000"}},
+						GasLimit: "200000",
+					},
+					SignDocRatio{Numerator: "5", Denominator: "100"},
+				)
+				sd.AddMessage("/punnet.bank.v1.MsgSend", json.RawMessage(`{"to":"bob"}`))
+				return sd
+			}(),
+			ExpectedJSON: `{"version":"1","chain_id":"punnet-1","account":"alice","account_sequence":"5","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"to":"bob"}}],"nonce":"5","memo":"fee test","fee":{"amount":[{"denom":"uatom","amount":"5000"}],"gas_limit":"200000"},"fee_slippage":{"numerator":"5","denominator":"100"}}`,
 		},
 	}
 }
@@ -742,7 +766,7 @@ func TestSignDocFixtures_Roundtrip(t *testing.T) {
 func TestSignDocSecurity_NoExtraFields(t *testing.T) {
 	// Verify that parsing ignores (or rejects) extra fields that shouldn't be there.
 	// This prevents injection of unexpected data.
-	jsonWithExtra := `{"version":"1","chain_id":"chain","account_sequence":1,"account":"alice","messages":[{"type":"/msg","data":{}}],"nonce":1,"evil_field":"malicious"}`
+	jsonWithExtra := `{"version":"1","chain_id":"chain","account":"alice","account_sequence":"1","messages":[{"type":"/msg","data":{}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"},"evil_field":"malicious"}`
 
 	parsed, err := ParseSignDoc([]byte(jsonWithExtra))
 	require.NoError(t, err)
@@ -1112,29 +1136,32 @@ func TestSignDoc_ToJSON_NeverFails(t *testing.T) {
 	//
 	// This test verifies this invariant holds.
 
+	defaultFee := SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"}
+	defaultSlippage := SignDocRatio{Numerator: "0", Denominator: "1"}
+
 	testCases := []struct {
 		name    string
 		signDoc *SignDoc
 	}{
 		{
 			name:    "nil messages slice",
-			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: nil},
+			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: nil, Fee: defaultFee, FeeSlippage: defaultSlippage},
 		},
 		{
 			name:    "empty messages slice",
-			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: []SignDocMessage{}},
+			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: []SignDocMessage{}, Fee: defaultFee, FeeSlippage: defaultSlippage},
 		},
 		{
 			name:    "nil message data",
-			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: []SignDocMessage{{Type: "/m", Data: nil}}},
+			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", Messages: []SignDocMessage{{Type: "/m", Data: nil}}, Fee: defaultFee, FeeSlippage: defaultSlippage},
 		},
 		{
 			name:    "empty string fields",
-			signDoc: &SignDoc{Version: "", ChainID: "", Account: "", Messages: []SignDocMessage{{Type: "", Data: nil}}},
+			signDoc: &SignDoc{Version: "", ChainID: "", Account: "", Messages: []SignDocMessage{{Type: "", Data: nil}}, Fee: defaultFee, FeeSlippage: defaultSlippage},
 		},
 		{
 			name:    "max uint64 values",
-			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", AccountSequence: math.MaxUint64, Nonce: math.MaxUint64, Messages: []SignDocMessage{{Type: "/m", Data: json.RawMessage(`{}`)}}},
+			signDoc: &SignDoc{Version: "1", ChainID: "c", Account: "a", AccountSequence: math.MaxUint64, Nonce: math.MaxUint64, Messages: []SignDocMessage{{Type: "/m", Data: json.RawMessage(`{}`)}}, Fee: defaultFee, FeeSlippage: defaultSlippage},
 		},
 	}
 
@@ -1163,13 +1190,13 @@ func TestSortedJSONObject_MarshalError(t *testing.T) {
 
 	// Test that our MarshalJSON handles all normal types correctly
 	obj := sortedJSONObject{
-		"string":  "value",
-		"number":  42,
-		"float":   3.14,
-		"bool":    true,
-		"null":    nil,
-		"array":   []interface{}{1, 2, 3},
-		"object":  map[string]interface{}{"nested": true},
+		"string": "value",
+		"number": 42,
+		"float":  3.14,
+		"bool":   true,
+		"null":   nil,
+		"array":  []interface{}{1, 2, 3},
+		"object": map[string]interface{}{"nested": true},
 	}
 
 	jsonBytes, err := obj.MarshalJSON()

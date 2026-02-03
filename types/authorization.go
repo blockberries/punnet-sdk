@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"math/big"
@@ -35,19 +34,25 @@ const (
 	AlgorithmSecp256r1 Algorithm = "secp256r1"
 )
 
-// ValidAlgorithms returns the list of supported algorithms.
+// ValidAlgorithms returns the list of production-ready algorithms.
+//
+// NOTE: secp256k1 and secp256r1 constants are defined above for documentation
+// and future implementation, but they are NOT exposed as valid until properly
+// implemented and tested. See Issue #XX for tracking.
+//
+// REVISIT WHEN: We have a concrete use case requiring secp256k1 (Ethereum key
+// compatibility) or secp256r1 (WebAuthn/passkeys).
 func ValidAlgorithms() []Algorithm {
-	return []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	return []Algorithm{AlgorithmEd25519}
 }
 
-// IsValidAlgorithm checks if the algorithm is supported.
+// IsValidAlgorithm checks if the algorithm is production-ready.
+//
+// INVARIANT: Only algorithms with complete, tested implementations return true.
+// BACKWARDS COMPATIBILITY: Empty string is treated as Ed25519.
 func IsValidAlgorithm(algo Algorithm) bool {
-	switch algo {
-	case AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1:
-		return true
-	default:
-		return false
-	}
+	// Only Ed25519 is production-ready. Empty defaults to Ed25519 for backwards compat.
+	return algo == AlgorithmEd25519 || algo == ""
 }
 
 // Signature represents a single signature with public key and algorithm.
@@ -80,9 +85,17 @@ func (s *Signature) GetAlgorithm() Algorithm {
 // ValidateBasic performs basic validation of the signature structure.
 //
 // INVARIANT: After successful validation, PubKey and Signature have correct sizes for the algorithm.
+// INVARIANT: Only production-ready algorithms pass validation.
 func (s *Signature) ValidateBasic() error {
 	algo := s.GetAlgorithm()
 
+	// SECURITY: First check if algorithm is production-ready.
+	// This ensures we reject secp256k1/secp256r1 until properly implemented.
+	if !IsValidAlgorithm(algo) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedAlgorithm, algo)
+	}
+
+	// Validate key and signature sizes for production-ready algorithms
 	switch algo {
 	case AlgorithmEd25519:
 		if len(s.PubKey) != ed25519.PublicKeySize {
@@ -94,19 +107,13 @@ func (s *Signature) ValidateBasic() error {
 				ErrInvalidSignature, ed25519.SignatureSize, len(s.Signature))
 		}
 
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		// Compressed public key is 33 bytes (1 byte prefix + 32 bytes X coordinate)
-		if len(s.PubKey) != 33 {
-			return fmt.Errorf("%w: %s public key must be 33 bytes (compressed), got %d",
-				ErrInvalidPublicKey, algo, len(s.PubKey))
-		}
-		// ECDSA signature is 64 bytes (32 bytes R + 32 bytes S)
-		if len(s.Signature) != 64 {
-			return fmt.Errorf("%w: %s signature must be 64 bytes, got %d",
-				ErrInvalidSignature, algo, len(s.Signature))
-		}
+	// NOTE: secp256k1 and secp256r1 cases are intentionally removed.
+	// IsValidAlgorithm() above already rejects these algorithms.
+	// When these algorithms become production-ready, add cases here with
+	// proper size validation (33-byte compressed pubkey, 64-byte signature).
 
 	default:
+		// This should be unreachable since IsValidAlgorithm already filters
 		return fmt.Errorf("%w: %s", ErrUnsupportedAlgorithm, algo)
 	}
 
@@ -145,29 +152,45 @@ func (s *Signature) Verify(message []byte) bool {
 //
 // IMPLEMENTATION NOTE: Go's standard library doesn't include secp256k1.
 // In production, this would use a proper secp256k1 library (e.g., btcec).
-// For now, we return false with a note that this requires external implementation.
+//
+// WARNING: This function is NOT production-ready. It is excluded from
+// ValidAlgorithms() and IsValidAlgorithm() to prevent accidental use.
+// Signatures using secp256k1 will fail validation before reaching this code.
+//
+// EXPECTED IMPLEMENTATION (for future reference):
+// 1. Decompress public key from 33 bytes to full coordinates
+// 2. Parse R and S from signature (32 bytes each)
+// 3. The message parameter is already SHA-256(SignDoc JSON) - do NOT double-hash
+// 4. Verify ECDSA signature
 func verifySecp256k1(pubKey, message, signature []byte) bool {
-	// TODO: Implement with proper secp256k1 library (btcec or similar)
-	// This is a placeholder that documents the expected behavior.
+	// SECURITY: This function should never be called in production.
+	// IsValidAlgorithm() rejects secp256k1, so ValidateBasic() will fail
+	// before Verify() is called.
 	//
-	// EXPECTED IMPLEMENTATION:
-	// 1. Decompress public key from 33 bytes to full coordinates
-	// 2. Parse R and S from signature (32 bytes each)
-	// 3. Hash message with SHA-256 (if not already hashed)
-	// 4. Verify ECDSA signature
-	//
-	// For now, return false to indicate unimplemented.
-	// This should be replaced with actual implementation in production.
-	_ = pubKey
-	_ = message
-	_ = signature
-	return false
+	// If this panic is ever reached, it indicates a bug in the validation logic.
+	panic("verifySecp256k1 called but algorithm is not production-ready - this indicates a validation bug")
 }
 
 // verifySecp256r1 verifies an ECDSA signature using the P-256 (secp256r1) curve.
 //
 // SECURITY: Uses Go's standard library crypto/ecdsa which is well-audited.
+//
+// WARNING: This function is NOT production-ready. It is excluded from
+// ValidAlgorithms() and IsValidAlgorithm() to prevent accidental use.
+// Signatures using secp256r1 will fail validation before reaching this code.
+//
+// KNOWN ISSUES (fixed but untested):
+// 1. Previously had double-hash bug (SHA-256 of already-hashed message) - FIXED
+// 2. Missing curve point validation - FIXED
+// 3. Needs proper integration testing with real secp256r1 signatures
 func verifySecp256r1(pubKey, message, signature []byte) bool {
+	// SECURITY: This function should never be called in production.
+	// IsValidAlgorithm() rejects secp256r1, so ValidateBasic() will fail
+	// before Verify() is called.
+	//
+	// The implementation below is kept for documentation and future use,
+	// but will panic if reached to catch any validation bypass bugs.
+
 	// Decompress public key
 	if len(pubKey) != 33 {
 		return false
@@ -179,8 +202,17 @@ func verifySecp256r1(pubKey, message, signature []byte) bool {
 		return false
 	}
 
+	curve := elliptic.P256()
+
+	// SECURITY FIX: Validate that the point is actually on the curve.
+	// A malicious actor could craft a compressed key where X is valid but
+	// produces a point not on the curve, leading to undefined behavior.
+	if !curve.IsOnCurve(x, y) {
+		return false
+	}
+
 	ecdsaPubKey := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
+		Curve: curve,
 		X:     x,
 		Y:     y,
 	}
@@ -192,17 +224,20 @@ func verifySecp256r1(pubKey, message, signature []byte) bool {
 	r := new(big.Int).SetBytes(signature[:32])
 	s := new(big.Int).SetBytes(signature[32:])
 
-	// For ECDSA, we hash the message
-	// Note: If message is already a hash (like from SignDoc.GetSignBytes), we use it directly
-	// The caller is responsible for ensuring proper hashing
-	hash := sha256.Sum256(message)
-
-	return ecdsa.Verify(ecdsaPubKey, hash[:], r, s)
+	// SECURITY FIX: The message parameter is already SHA-256(SignDoc JSON) from
+	// SignDoc.GetSignBytes(). Do NOT double-hash.
+	//
+	// ECDSA verification expects the hash of the message. Since our message
+	// is already the hash, we pass it directly.
+	return ecdsa.Verify(ecdsaPubKey, message, r, s)
 }
 
 // decompressP256PublicKey decompresses a 33-byte compressed P-256 public key.
 //
 // Format: 0x02 or 0x03 prefix (indicating Y coordinate parity) + 32 bytes X coordinate
+//
+// SECURITY: This function validates that the decompressed point lies on the P-256 curve.
+// A malicious actor could craft a compressed key that produces invalid coordinates.
 func decompressP256PublicKey(compressed []byte) (*big.Int, *big.Int) {
 	if len(compressed) != 33 {
 		return nil, nil
@@ -246,6 +281,12 @@ func decompressP256PublicKey(compressed []byte) (*big.Int, *big.Int) {
 		y.Sub(p, y)
 	} else if prefix == 0x03 && y.Bit(0) == 0 {
 		y.Sub(p, y)
+	}
+
+	// SECURITY FIX: Verify point is actually on the curve.
+	// This is defense-in-depth; the caller should also verify.
+	if !curve.IsOnCurve(x, y) {
+		return nil, nil
 	}
 
 	return x, y

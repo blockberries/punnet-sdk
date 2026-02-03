@@ -15,20 +15,13 @@ const (
 )
 
 // Keyring error types.
+// Note: ErrInvalidPassword is defined in errors.go for shared use.
 var (
-	ErrKeyNotFound     = errors.New("key not found")
-	ErrKeyExists       = errors.New("key already exists")
-	ErrInvalidPassword = errors.New("invalid password")
-	ErrInvalidKey      = errors.New("invalid key data")
-	ErrDataTooLarge    = errors.New("data exceeds maximum sign length")
+	ErrKeyNotFound  = errors.New("key not found")
+	ErrKeyExists    = errors.New("key already exists")
+	ErrInvalidKey   = errors.New("invalid key data")
+	ErrDataTooLarge = errors.New("data exceeds maximum sign length")
 )
-
-// validateKeyName validates a key name for security.
-// Uses the shared ValidateKeyName function from keystore.go.
-// Complexity: O(n) where n is name length.
-func validateKeyName(name string) error {
-	return ValidateKeyName(name)
-}
 
 // Keyring manages multiple signing keys.
 // All methods are thread-safe.
@@ -122,7 +115,7 @@ func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
 // NewKey generates a new key.
 func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := validateKeyName(name); err != nil {
+	if err := ValidateKeyName(name); err != nil {
 		return nil, err
 	}
 
@@ -165,7 +158,7 @@ func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 // ImportKey imports an existing private key.
 func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := validateKeyName(name); err != nil {
+	if err := ValidateKeyName(name); err != nil {
 		return nil, err
 	}
 

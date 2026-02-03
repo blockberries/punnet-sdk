@@ -1,33 +1,8 @@
 package crypto
 
 import (
-	"errors"
 	"strings"
 	"unicode/utf8"
-)
-
-// KeyStore error types.
-var (
-	// ErrKeyStoreNotFound is returned when a key is not found in the store.
-	ErrKeyStoreNotFound = errors.New("key not found in store")
-
-	// ErrKeyStoreExists is returned when attempting to store a key that already exists.
-	ErrKeyStoreExists = errors.New("key already exists in store")
-
-	// ErrKeyStoreIO is returned when an I/O error occurs during store operations.
-	ErrKeyStoreIO = errors.New("key store I/O error")
-
-	// ErrInvalidKeyName is returned when a key name fails validation.
-	ErrInvalidKeyName = errors.New("invalid key name")
-
-	// ErrInvalidEncryptionParams is returned when encryption parameters are invalid.
-	ErrInvalidEncryptionParams = errors.New("invalid encryption parameters")
-
-	// ErrInvalidAlgorithm is returned when an algorithm is not recognized.
-	ErrInvalidAlgorithm = errors.New("invalid algorithm")
-
-	// ErrKeyNameMismatch is returned when the name parameter differs from EncryptedKey.Name.
-	ErrKeyNameMismatch = errors.New("key name parameter does not match EncryptedKey.Name")
 )
 
 // Cryptographic parameter constants per NIST recommendations.

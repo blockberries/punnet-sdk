@@ -47,8 +47,8 @@ func NewAccount(name AccountName, pubKey []byte) *Account {
 	return &Account{
 		Name: name,
 		Authority: Authority{
-			Threshold:    1,
-			KeyWeights:   map[string]uint64{string(pubKey): 1},
+			Threshold:      1,
+			KeyWeights:     map[string]uint64{string(pubKey): 1},
 			AccountWeights: make(map[AccountName]uint64),
 		},
 		Nonce:     0,
