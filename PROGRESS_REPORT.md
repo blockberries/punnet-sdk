@@ -3954,3 +3954,146 @@ go build ./...
 # Success - no errors or warnings
 ```
 
+---
+
+## Issue #110: Keyring.Close() with Error Aggregation - COMPLETED
+
+### Overview
+Implemented `Keyring.Close()` method that properly aggregates errors from store delete operations instead of silently ignoring them. This ensures callers are alerted when key material may remain on disk due to delete failures on file-backed stores.
+
+### Completion Date
+February 3, 2026
+
+---
+
+### Security Context
+
+On file-backed stores (like `FileKeyStore`), a failed delete could leave unzeroed key material on disk. The previous implementation in PR #63 silently ignored these errors:
+
+```go
+// Previous behavior - error ignored!
+kr.store.Delete(name)
+```
+
+This implementation aggregates all delete errors and returns them to the caller, while still marking the keyring as closed to prevent further use.
+
+---
+
+### Files Modified
+
+1. **crypto/keyring.go**
+   - Added `ErrKeyringClosed` error for operations after close
+   - Added `Close()` method to `Keyring` interface with comprehensive documentation
+   - Implemented `Close()` in `defaultKeyring` with:
+     - Cache zeroization before store cleanup
+     - Store iteration with zeroize-then-delete for each key
+     - Error aggregation for failed deletions
+     - Support for stores that implement `Close() error`
+   - Added `closed` field to `defaultKeyring` struct
+   - Added `checkClosed()` helper for consistent closed state checks
+   - Added `zeroizeSigner()` helper for cache cleanup
+   - Updated all Keyring methods (`NewKey`, `ImportKey`, `ExportKey`, `GetKey`, `ListKeys`, `DeleteKey`, `Sign`) to check closed state
+   - `DeleteKey` now zeroizes cached signers before removal
+
+2. **crypto/keyring_test.go**
+   - Added `TestKeyringClose`: Basic close functionality, verifies store is emptied
+   - Added `TestKeyringCloseIdempotent`: Safe to call multiple times (returns nil)
+   - Added `TestKeyringOperationsAfterClose`: All operations return `ErrKeyringClosed`
+   - Added `TestKeyringClosePartialFailure`: Error aggregation with mock failing store
+   - Added `TestKeyringCloseZeroizesCache`: Verifies cached private keys are zeroized
+   - Added `BenchmarkKeyringClose`: Performance with various key counts (10, 100, 1000)
+
+---
+
+### Key Functionality Implemented
+
+#### Close() Interface Contract
+```go
+// Close releases all resources and zeroizes all cached private keys.
+// After Close is called, all other methods will return ErrKeyringClosed.
+//
+// Shutdown order:
+//   1. Zeroize all cached signers (private keys in memory)
+//   2. For each key in the store: zeroize the private key data, then delete
+//   3. Close the underlying key store (if it supports Close)
+//
+// If any store.Delete operations fail, errors are aggregated and returned.
+// The keyring is still marked as closed even if some deletions fail.
+// This ensures the keyring cannot be used again, but alerts the caller
+// that some key material may remain on disk.
+//
+// This method is safe to call multiple times; subsequent calls are no-ops.
+Close() error
+```
+
+#### Error Aggregation Pattern
+```go
+var errs []error
+for _, name := range names {
+    entry, err := kr.store.Get(name)
+    if err != nil {
+        continue // Key may have been deleted concurrently
+    }
+    Zeroize(entry.PrivateKey)
+    if err := kr.store.Delete(name); err != nil {
+        errs = append(errs, fmt.Errorf("failed to delete %s: %w", name, err))
+    }
+}
+if len(errs) > 0 {
+    return fmt.Errorf("close completed with errors: %v", errs)
+}
+```
+
+---
+
+### Security Considerations
+
+| Aspect | Behavior |
+|--------|----------|
+| Close-then-use | All methods return `ErrKeyringClosed` |
+| Cache cleanup | Private keys in memory are zeroized first |
+| Store cleanup | Each key is zeroized before deletion attempt |
+| Partial failure | Keyring still marked closed, errors aggregated |
+| Idempotency | Safe to call multiple times (no-op after first) |
+| Thread safety | `mu.Lock()` held during close operations |
+
+---
+
+### Test Coverage
+
+- **Basic close**: Verifies store is emptied after close
+- **Idempotency**: Multiple closes return nil (no error)
+- **Operations after close**: All 7 methods return `ErrKeyringClosed`
+- **Partial failure**: Errors aggregated, keyring still closed
+- **Cache zeroization**: Private key bytes set to zero
+
+---
+
+### Benchmark Results
+
+```
+BenchmarkKeyringClose/keys=10-12      18244    64521 ns/op
+BenchmarkKeyringClose/keys=100-12      1868   639427 ns/op
+BenchmarkKeyringClose/keys=1000-12      182  6489234 ns/op
+```
+
+Close time scales linearly with key count (~65μs per 10 keys).
+
+---
+
+### Verification
+
+```bash
+go test ./crypto/... -v -run "TestKeyringClose"
+# All close-related tests passing
+
+go test ./crypto/... -bench=KeyringClose
+# BenchmarkKeyringClose scales linearly
+
+go build ./...
+# Success - no errors or warnings
+
+golangci-lint run ./crypto/...
+# No linting issues
+```
+
