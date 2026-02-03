@@ -3,7 +3,7 @@
 # Main CI pipeline for punnet-sdk. Runs on every PR and push to main.
 #
 # Maintainer: The Glue
-# Last major update: 2026-02 (switched golangci-lint to binary mode - #77)
+# Last major update: 2026-02 (golangci-lint binary mode #77, cross-platform builds #81)
 #
 # If this breaks at 2 AM, check:
 # 1. GitHub Actions status page
@@ -25,6 +25,7 @@ permissions:
   pull-requests: write
 
 env:
+  # Go version must match go.mod
   GO_VERSION: '1.25'
 
 jobs:
