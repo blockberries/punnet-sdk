@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/blockberries/cramberry/pkg/cramberry"
+	"golang.org/x/text/unicode/norm"
 )
 
 // SignDocVersion is the current version of the SignDoc format.
@@ -233,13 +234,12 @@ func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 // - Field order follows struct declaration order for reproducibility
 // - No reliance on map iteration (which is non-deterministic in Go)
 //
-// KNOWN LIMITATION (Unicode Normalization):
-// This implementation does NOT perform Unicode normalization (NFC/NFD).
-// Two strings that appear identical visually but differ in Unicode representation
-// (e.g., "café" composed U+00E9 vs decomposed U+0065+U+0301) will produce different
-// JSON bytes and thus different signatures. Applications that accept user input
-// should normalize strings to NFC before creating SignDocs to ensure consistent
-// behavior across implementations.
+// UNICODE NORMALIZATION:
+// ValidateBasic() now enforces that all string fields are NFC-normalized.
+// This ensures that visually identical strings (e.g., "café" composed vs decomposed)
+// produce identical signatures across all implementations. If you receive a
+// validation error about non-NFC strings, normalize your input using
+// golang.org/x/text/unicode/norm.NFC.String() before creating the SignDoc.
 //
 // OPTIMIZATION: Uses bytes.Buffer instead of strings.Builder to avoid the double
 // allocation that occurs with strings.Builder.String() + []byte(...) conversion.
@@ -399,6 +399,26 @@ func isCompactJSON(data []byte) bool {
 	return true
 }
 
+// isNFCNormalized checks if a string is already in Unicode NFC (Canonical Decomposition,
+// followed by Canonical Composition) form.
+//
+// SECURITY RATIONALE:
+// Two strings that appear visually identical can differ in Unicode representation:
+// - Composed: "café" using U+00E9 (LATIN SMALL LETTER E WITH ACUTE)
+// - Decomposed: "café" using U+0065 + U+0301 (e + COMBINING ACUTE ACCENT)
+// These produce different JSON bytes → different signatures for 'same' content.
+//
+// To prevent signature mismatches and potential attack vectors:
+// - We require all strings to be NFC-normalized before signing
+// - Non-NFC strings are rejected with a clear error message
+// - Applications must normalize user input to NFC before creating SignDocs
+//
+// NFC is the standard "composed" form used by most text systems and is the
+// W3C recommended normalization form for the web.
+func isNFCNormalized(s string) bool {
+	return norm.NFC.IsNormalString(s)
+}
+
 // GetSignBytes returns the bytes that should be signed.
 //
 // SECURITY: This is SHA-256(canonical_json), not the raw JSON.
@@ -436,6 +456,20 @@ func (sd *SignDoc) ValidateBasic() error {
 		return fmt.Errorf("%w: account cannot be empty", ErrSignDocMismatch)
 	}
 
+	// SECURITY: Validate Unicode NFC normalization for all string fields.
+	// Non-NFC strings can cause signature mismatches across implementations
+	// that normalize differently. Failing fast ensures consistent behavior.
+	// See: https://unicode.org/reports/tr15/
+	if !isNFCNormalized(sd.ChainID) {
+		return fmt.Errorf("%w: chain_id is not Unicode NFC-normalized (normalize with golang.org/x/text/unicode/norm.NFC.String before signing)", ErrSignDocMismatch)
+	}
+	if !isNFCNormalized(sd.Account) {
+		return fmt.Errorf("%w: account is not Unicode NFC-normalized (normalize with golang.org/x/text/unicode/norm.NFC.String before signing)", ErrSignDocMismatch)
+	}
+	if !isNFCNormalized(sd.Memo) {
+		return fmt.Errorf("%w: memo is not Unicode NFC-normalized (normalize with golang.org/x/text/unicode/norm.NFC.String before signing)", ErrSignDocMismatch)
+	}
+
 	if len(sd.Messages) == 0 {
 		return fmt.Errorf("%w: SignDoc must contain at least one message", ErrSignDocMismatch)
 	}
@@ -450,6 +484,11 @@ func (sd *SignDoc) ValidateBasic() error {
 	for i, msg := range sd.Messages {
 		if msg.Type == "" {
 			return fmt.Errorf("%w: message %d has empty type", ErrSignDocMismatch, i)
+		}
+
+		// SECURITY: Validate message type is NFC-normalized
+		if !isNFCNormalized(msg.Type) {
+			return fmt.Errorf("%w: message %d type is not Unicode NFC-normalized", ErrSignDocMismatch, i)
 		}
 
 		// SECURITY: Limit message data size to prevent memory exhaustion
@@ -538,6 +577,7 @@ func (r *SignDocRatio) ValidateBasic() error {
 // ValidateBasic performs stateless validation of SignDocCoin.
 //
 // INVARIANT: Denom MUST be non-empty and at most 64 characters.
+// INVARIANT: Denom MUST be Unicode NFC-normalized.
 // INVARIANT: Amount MUST be a valid non-negative decimal string.
 func (c *SignDocCoin) ValidateBasic() error {
 	if c.Denom == "" {
@@ -545,6 +585,10 @@ func (c *SignDocCoin) ValidateBasic() error {
 	}
 	if len(c.Denom) > 64 {
 		return fmt.Errorf("denom too long (%d > 64)", len(c.Denom))
+	}
+	// SECURITY: Validate denom is NFC-normalized to prevent signature mismatches
+	if !isNFCNormalized(c.Denom) {
+		return fmt.Errorf("denom is not Unicode NFC-normalized")
 	}
 
 	if c.Amount == "" {
