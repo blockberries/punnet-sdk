@@ -15,8 +15,8 @@ type testMessage struct {
 	Signers []AccountName `json:"signers"`
 }
 
-func (m *testMessage) Type() string             { return m.MsgType }
-func (m *testMessage) ValidateBasic() error     { return nil }
+func (m *testMessage) Type() string              { return m.MsgType }
+func (m *testMessage) ValidateBasic() error      { return nil }
 func (m *testMessage) GetSigners() []AccountName { return m.Signers }
 
 func TestTransaction_ToSignDoc(t *testing.T) {
@@ -36,9 +36,9 @@ func TestTransaction_ToSignDoc(t *testing.T) {
 
 	assert.Equal(t, SignDocVersion, signDoc.Version)
 	assert.Equal(t, "test-chain", signDoc.ChainID)
-	assert.Equal(t, uint64(42), signDoc.AccountSequence)
+	assert.Equal(t, StringUint64(42), signDoc.AccountSequence)
 	assert.Equal(t, "alice", signDoc.Account)
-	assert.Equal(t, uint64(42), signDoc.Nonce)
+	assert.Equal(t, StringUint64(42), signDoc.Nonce)
 	assert.Equal(t, "test memo", signDoc.Memo)
 	require.Len(t, signDoc.Messages, 1)
 	assert.Equal(t, "/punnet.bank.v1.MsgSend", signDoc.Messages[0].Type)
