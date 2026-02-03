@@ -325,10 +325,19 @@ func secp256r1PrivateKeyFromBytes(data []byte) (PrivateKey, error) {
 	return &secp256r1PrivateKey{key: key}, nil
 }
 
-// secp256k1PublicKeyFromBytes creates a secp256k1 public key from compressed bytes (33 bytes).
+// secp256k1PublicKeyFromBytes creates a secp256k1 public key from bytes.
+// Accepts both compressed (33 bytes, 0x02/0x03 prefix) and uncompressed
+// (65 bytes, 0x04 prefix) formats for interoperability.
+//
+// Bytes() always returns compressed format (33 bytes) regardless of input format.
 func secp256k1PublicKeyFromBytes(data []byte) (PublicKey, error) {
-	if len(data) != 33 {
-		return nil, fmt.Errorf("invalid secp256k1 public key size: expected 33, got %d", len(data))
+	switch len(data) {
+	case 33: // Compressed format (0x02 or 0x03 prefix)
+		// Valid
+	case 65: // Uncompressed format (0x04 prefix)
+		// Valid
+	default:
+		return nil, fmt.Errorf("invalid secp256k1 public key size: expected 33 or 65, got %d", len(data))
 	}
 
 	key, err := secp256k1.ParsePubKey(data)

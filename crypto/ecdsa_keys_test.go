@@ -253,6 +253,80 @@ func TestSecp256k1PublicKeyFromBytes(t *testing.T) {
 	}
 }
 
+// TestSecp256k1UncompressedPublicKey tests parsing of 65-byte uncompressed public keys.
+func TestSecp256k1UncompressedPublicKey(t *testing.T) {
+	key, err := GeneratePrivateKey(AlgorithmSecp256k1)
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey failed: %v", err)
+	}
+
+	// Get the internal secp256k1 key to access uncompressed format
+	privKey, ok := key.(*secp256k1PrivateKey)
+	if !ok {
+		t.Fatal("expected secp256k1PrivateKey type")
+	}
+
+	// Get uncompressed public key bytes (65 bytes, 0x04 prefix)
+	uncompressedBytes := privKey.key.PubKey().SerializeUncompressed()
+	if len(uncompressedBytes) != 65 {
+		t.Fatalf("expected uncompressed key size 65, got %d", len(uncompressedBytes))
+	}
+	if uncompressedBytes[0] != 0x04 {
+		t.Fatalf("expected 0x04 prefix for uncompressed key, got 0x%02x", uncompressedBytes[0])
+	}
+
+	// Parse uncompressed public key
+	pubKey, err := PublicKeyFromBytes(AlgorithmSecp256k1, uncompressedBytes)
+	if err != nil {
+		t.Fatalf("PublicKeyFromBytes(uncompressed) failed: %v", err)
+	}
+
+	// Should equal the original public key
+	if !pubKey.Equals(key.PublicKey()) {
+		t.Error("uncompressed public key should equal original")
+	}
+
+	// Bytes() should return compressed format (33 bytes)
+	compressedBytes := pubKey.Bytes()
+	if len(compressedBytes) != 33 {
+		t.Errorf("expected Bytes() to return 33 bytes (compressed), got %d", len(compressedBytes))
+	}
+
+	// Verify signature works with key from uncompressed bytes
+	message := []byte("test message for uncompressed key")
+	sig, err := key.Sign(message)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+	if !pubKey.Verify(message, sig) {
+		t.Error("verification with uncompressed-derived key failed")
+	}
+}
+
+// TestSecp256k1PublicKeyInvalidSizes tests rejection of invalid public key sizes.
+func TestSecp256k1PublicKeyInvalidSizes(t *testing.T) {
+	tests := []struct {
+		name string
+		size int
+	}{
+		{"too small (32)", 32},
+		{"too small (1)", 1},
+		{"between compressed and uncompressed (50)", 50},
+		{"too large (66)", 66},
+		{"empty", 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := make([]byte, tc.size)
+			_, err := PublicKeyFromBytes(AlgorithmSecp256k1, data)
+			if err == nil {
+				t.Errorf("expected error for size %d, got nil", tc.size)
+			}
+		})
+	}
+}
+
 func TestSecp256r1PublicKeyFromBytes(t *testing.T) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
 	if err != nil {
