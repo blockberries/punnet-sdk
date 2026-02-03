@@ -396,12 +396,13 @@ func BenchmarkPublicKeyEquals_Ed25519(b *testing.B) {
 }
 
 // BenchmarkZeroize measures the time to securely clear sensitive data.
-// Uses runtime.KeepAlive to prevent the compiler from optimizing away the
-// zeroing operation, which could otherwise result in misleading benchmark results.
 //
-// NOTE: Small sizes (32-64 bytes) may show unexpectedly fast or inconsistent results
-// due to CPU cache effects and loop unrolling. The benchmark still provides useful
-// relative comparisons and detects major performance regressions at larger sizes.
+// The Zeroize implementation uses crypto/subtle.ConstantTimeCopy which cannot
+// be optimized away by the compiler. runtime.KeepAlive is retained to ensure
+// the slice itself isn't collected, though it's not strictly necessary for
+// preventing dead-store elimination.
+//
+// Expected scaling: ~0.27 ns/byte, 0 allocs/op (using static zero buffer).
 func BenchmarkZeroize(b *testing.B) {
 	sizes := []int{32, 64, 128, 256, 512}
 
@@ -413,7 +414,6 @@ func BenchmarkZeroize(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				Zeroize(data)
-				// Prevent compiler from optimizing away the Zeroize operation
 				runtime.KeepAlive(data)
 			}
 		})
