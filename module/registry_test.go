@@ -430,11 +430,11 @@ func TestRegistry_Deterministic(t *testing.T) {
 		modB, _ := NewModuleBuilder("b").Build()
 		modC, _ := NewModuleBuilder("c").WithDependencies("a", "b").Build()
 
-		r.Register(modA)
-		r.Register(modB)
-		r.Register(modC)
+		_ = r.Register(modA)
+		_ = r.Register(modB)
+		_ = r.Register(modC)
 
-		r.Build()
+		_ = r.Build()
 		names, _ := r.ModuleNames()
 		return names
 	}
