@@ -129,6 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Document `msg.Data` canonicalization requirements for SignDoc (#96)
+  - Callers must provide canonical JSON in `SignDocMessage.Data` field
+  - Rationale: Re-canonicalization would lose type information and add overhead
+  - SDK serialization code is trusted to produce canonical output
 - Document `SignDocSerializable` thread-safety requirements (#122)
   - `SignDocData()` must be safe for concurrent calls
   - Determinism requirements documented
