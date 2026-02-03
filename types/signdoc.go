@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/blockberries/cramberry/pkg/cramberry"
 )
@@ -241,8 +240,12 @@ func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 // JSON bytes and thus different signatures. Applications that accept user input
 // should normalize strings to NFC before creating SignDocs to ensure consistent
 // behavior across implementations.
+//
+// OPTIMIZATION: Uses bytes.Buffer instead of strings.Builder to avoid the double
+// allocation that occurs with strings.Builder.String() + []byte(...) conversion.
+// bytes.Buffer.Bytes() returns a slice of the internal buffer directly.
 func (sd *SignDoc) ToJSON() ([]byte, error) {
-	var b strings.Builder
+	var b bytes.Buffer
 
 	// Pre-allocate reasonable capacity to reduce allocations
 	b.Grow(256)
@@ -279,11 +282,16 @@ func (sd *SignDoc) ToJSON() ([]byte, error) {
 
 	b.WriteString(`}`)
 
-	return []byte(b.String()), nil
+	// bytes.Buffer.Bytes() returns a slice of the internal buffer. Since this buffer
+	// is not reused after this function returns, returning the slice directly is safe.
+	// This avoids the double allocation that occurred with strings.Builder:
+	// Old: strings.Builder.String() (alloc 1) -> []byte(string) (alloc 2)
+	// New: bytes.Buffer.Bytes() returns internal buffer slice (no extra alloc)
+	return b.Bytes(), nil
 }
 
-// writeMessagesJSON writes the messages array to the builder.
-func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
+// writeMessagesJSON writes the messages array to the buffer.
+func (sd *SignDoc) writeMessagesJSON(b *bytes.Buffer) error {
 	b.WriteString(`[`)
 	for i, msg := range sd.Messages {
 		if i > 0 {
@@ -311,8 +319,8 @@ func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
 	return nil
 }
 
-// writeJSON writes the SignDocFee to the builder in deterministic JSON format.
-func (f *SignDocFee) writeJSON(b *strings.Builder) {
+// writeJSON writes the SignDocFee to the buffer in deterministic JSON format.
+func (f *SignDocFee) writeJSON(b *bytes.Buffer) {
 	b.WriteString(`{"amount":[`)
 	for i, coin := range f.Amount {
 		if i > 0 {
@@ -329,8 +337,8 @@ func (f *SignDocFee) writeJSON(b *strings.Builder) {
 	b.WriteString(`}`)
 }
 
-// writeJSON writes the SignDocRatio to the builder in deterministic JSON format.
-func (r *SignDocRatio) writeJSON(b *strings.Builder) {
+// writeJSON writes the SignDocRatio to the buffer in deterministic JSON format.
+func (r *SignDocRatio) writeJSON(b *bytes.Buffer) {
 	b.WriteString(`{"numerator":`)
 	b.WriteString(cramberry.EscapeJSONString(r.Numerator))
 	b.WriteString(`,"denominator":`)
