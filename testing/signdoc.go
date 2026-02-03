@@ -2,6 +2,8 @@
 package testing
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/blockberries/punnet-sdk/types"
@@ -18,6 +20,10 @@ import (
 // SECURITY: Non-deterministic SignDocData() implementations can cause signature
 // verification failures when the SignDoc is reconstructed on different nodes,
 // as different byte serializations produce different hashes.
+//
+// Note: This function uses require semantics and fails immediately on the first
+// non-deterministic result. There is no separate "assert" variant that continues
+// after failures.
 //
 // Usage:
 //
@@ -46,22 +52,16 @@ func AssertSignDocDataDeterminism(t *testing.T, msg types.SignDocSerializable, i
 	for i := 1; i < iterations; i++ {
 		result, err := msg.SignDocData()
 		require.NoError(t, err, "SignDocData() failed on iteration %d", i)
-		require.Equal(t, string(first), string(result),
-			"SignDocData() returned different bytes on iteration %d.\n"+
+		// Use bytes.Equal to avoid string conversion allocations in the success path
+		if !bytes.Equal(first, result) {
+			t.Fatalf("SignDocData() returned different bytes on iteration %d.\n"+
 				"First:  %s\n"+
 				"Got:    %s\n"+
 				"This indicates non-deterministic serialization, likely due to "+
 				"map iteration order. Ensure map keys are sorted before serialization.",
-			i, string(first), string(result))
+				i, string(first), string(result))
+		}
 	}
-}
-
-// RequireSignDocDataDeterminism is like AssertSignDocDataDeterminism but fails
-// immediately on the first non-deterministic result using require instead of assert.
-// Use this when subsequent tests depend on determinism.
-func RequireSignDocDataDeterminism(t *testing.T, msg types.SignDocSerializable, iterations int) {
-	t.Helper()
-	AssertSignDocDataDeterminism(t, msg, iterations)
 }
 
 // AssertSignDocDataValid validates that a SignDocSerializable implementation
@@ -69,8 +69,9 @@ func RequireSignDocDataDeterminism(t *testing.T, msg types.SignDocSerializable, 
 //
 // This helper verifies:
 // 1. SignDocData() returns without error
-// 2. The returned bytes are valid JSON
-// 3. Repeated calls produce identical output (determinism)
+// 2. The returned bytes are non-empty
+// 3. The returned bytes are valid JSON syntax
+// 4. Repeated calls produce identical output (determinism with 100 iterations)
 //
 // Usage:
 //
@@ -84,12 +85,12 @@ func AssertSignDocDataValid(t *testing.T, msg types.SignDocSerializable) {
 	data, err := msg.SignDocData()
 	require.NoError(t, err, "SignDocData() returned error")
 	require.NotNil(t, data, "SignDocData() returned nil")
-
-	// Verify it's valid JSON by checking it can be unmarshalled
-	// json.RawMessage is already validated by the JSON package when marshaled,
-	// but we verify the invariant holds
 	require.True(t, len(data) > 0, "SignDocData() returned empty bytes")
 
-	// Verify determinism with a reasonable number of iterations
-	AssertSignDocDataDeterminism(t, msg, 10)
+	// Verify it's valid JSON syntax
+	require.True(t, json.Valid(data), "SignDocData() returned invalid JSON: %s", string(data))
+
+	// Verify determinism with thorough iteration count
+	// Using 100 iterations as recommended for catching Go map iteration randomization
+	AssertSignDocDataDeterminism(t, msg, 100)
 }

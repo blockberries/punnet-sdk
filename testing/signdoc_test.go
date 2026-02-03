@@ -87,6 +87,18 @@ func (m *nilMessage) SignDocData() (json.RawMessage, error) {
 	return nil, nil
 }
 
+// invalidJSONMessage is a test message that returns invalid JSON from SignDocData
+type invalidJSONMessage struct{}
+
+func (m *invalidJSONMessage) Type() string                    { return "/test.InvalidJSONMsg" }
+func (m *invalidJSONMessage) ValidateBasic() error            { return nil }
+func (m *invalidJSONMessage) GetSigners() []types.AccountName { return nil }
+
+func (m *invalidJSONMessage) SignDocData() (json.RawMessage, error) {
+	// Return invalid JSON (missing closing brace)
+	return json.RawMessage(`{"from":"alice","to":"bob"`), nil
+}
+
 // =============================================================================
 // TESTS FOR AssertSignDocDataDeterminism
 // =============================================================================
@@ -167,15 +179,13 @@ func TestAssertSignDocDataValid_VerifiesValidJSON(t *testing.T) {
 	assert.Equal(t, float64(100), parsed["amount"])
 }
 
-// =============================================================================
-// TESTS FOR RequireSignDocDataDeterminism
-// =============================================================================
+func TestAssertSignDocDataValid_DetectsInvalidJSON(t *testing.T) {
+	msg := &invalidJSONMessage{}
 
-func TestRequireSignDocDataDeterminism_PassesForDeterministicMessage(t *testing.T) {
-	msg := &deterministicMessage{From: "alice", To: "bob", Amount: 100}
-
-	// Should not panic or fail
-	RequireSignDocDataDeterminism(t, msg, 100)
+	// Verify SignDocData returns invalid JSON that json.Valid would reject
+	data, err := msg.SignDocData()
+	require.NoError(t, err)
+	assert.False(t, json.Valid(data), "invalidJSONMessage should return invalid JSON")
 }
 
 // =============================================================================

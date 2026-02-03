@@ -86,7 +86,8 @@ func newSigningTestEnv() *signingTestEnv {
 // This matches how VerifyAuthorization computes the sign bytes.
 func (e *signingTestEnv) getSignDocBytes(t *testing.T, tx *types.Transaction, account *types.Account) []byte {
 	t.Helper()
-	signDoc := tx.ToSignDoc(e.chainID, account.Nonce)
+	signDoc, err := tx.ToSignDoc(e.chainID, account.Nonce)
+	require.NoError(t, err, "failed to create SignDoc")
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err, "failed to get sign bytes from SignDoc")
 	return signBytes
@@ -461,13 +462,14 @@ func TestNegative_WrongNonce(t *testing.T) {
 	// INVARIANT: Sign bytes must bind to a specific nonce to prevent replay attacks.
 	// Here we deliberately sign with tx.Nonce (0) while account expects nonce 5.
 	// The verification will compute sign bytes using account.Nonce (5), causing mismatch.
-	signDoc := tx.ToSignDoc(testChainID, tx.Nonce) // Deliberately using tx.Nonce (wrong)
+	signDoc, err := tx.ToSignDoc(testChainID, tx.Nonce) // Deliberately using tx.Nonce (wrong)
+	require.NoError(t, err)
 	signBytes, err := signDoc.GetSignBytes()
 	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
-	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
+	err = tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.Error(t, err, "wrong nonce should fail verification")
 	assert.Contains(t, err.Error(), "nonce", "error should mention nonce")
 }
