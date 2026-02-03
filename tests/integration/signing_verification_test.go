@@ -458,9 +458,12 @@ func TestNegative_WrongNonce(t *testing.T) {
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil) // Wrong nonce: 0 instead of 5
 
-	// Note: Even with wrong nonce in tx, we sign with tx's nonce (via ToSignDoc)
-	// The verification will fail on nonce check, not signature check
-	signBytes := env.getSignDocBytes(t, tx, account)
+	// INVARIANT: Sign bytes must bind to a specific nonce to prevent replay attacks.
+	// Here we deliberately sign with tx.Nonce (0) while account expects nonce 5.
+	// The verification will compute sign bytes using account.Nonce (5), causing mismatch.
+	signDoc := tx.ToSignDoc(testChainID, tx.Nonce) // Deliberately using tx.Nonce (wrong)
+	signBytes, err := signDoc.GetSignBytes()
+	require.NoError(t, err)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 

@@ -34,7 +34,8 @@ func TestTransaction_ToSignDoc_WithFee(t *testing.T) {
 		},
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 42)
+	signDoc, err := tx.ToSignDoc("test-chain", 42)
+	require.NoError(t, err)
 
 	// Basic fields
 	assert.Equal(t, SignDocVersion, signDoc.Version)
@@ -78,7 +79,8 @@ func TestTransaction_ToSignDoc_WithMultipleFeeCoins(t *testing.T) {
 		},
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 
 	// Verify coin ordering is preserved
 	require.Len(t, signDoc.Fee.Amount, 2)
@@ -112,7 +114,8 @@ func TestTransaction_ToSignDoc_ZeroFee(t *testing.T) {
 		},
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 
 	assert.Equal(t, "0", signDoc.Fee.GasLimit)
 	assert.Empty(t, signDoc.Fee.Amount)
@@ -141,7 +144,8 @@ func TestTransaction_ToSignDoc_MaxUint64Values(t *testing.T) {
 		},
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", math.MaxUint64)
+	signDoc, err := tx.ToSignDoc("test-chain", math.MaxUint64)
+	require.NoError(t, err)
 
 	// Verify max values are correctly serialized as decimal strings
 	assert.Equal(t, StringUint64(math.MaxUint64), signDoc.AccountSequence)
@@ -157,14 +161,16 @@ func TestTransaction_ToSignDoc_MaxUint64Values(t *testing.T) {
 // =============================================================================
 
 func TestConvertMessages_NilInput(t *testing.T) {
-	result := convertMessages(nil)
+	result, err := convertMessages(nil)
+	require.NoError(t, err)
 
 	assert.NotNil(t, result)
 	assert.Empty(t, result)
 }
 
 func TestConvertMessages_EmptySlice(t *testing.T) {
-	result := convertMessages([]Message{})
+	result, err := convertMessages([]Message{})
+	require.NoError(t, err)
 
 	assert.NotNil(t, result)
 	assert.Empty(t, result)
@@ -176,14 +182,15 @@ func TestConvertMessages_SingleMessage(t *testing.T) {
 		Signers: []AccountName{"alice"},
 	}
 
-	result := convertMessages([]Message{msg})
+	result, err := convertMessages([]Message{msg})
+	require.NoError(t, err)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "/punnet.bank.v1.MsgSend", result[0].Type)
 
-	// Verify data contains signers
+	// Verify data contains signers (fallback behavior for non-SignDocSerializable)
 	var data map[string][]string
-	err := json.Unmarshal(result[0].Data, &data)
+	err = json.Unmarshal(result[0].Data, &data)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alice"}, data["signers"])
 }
@@ -198,7 +205,8 @@ func TestConvertMessages_MultipleMessages(t *testing.T) {
 		Signers: []AccountName{"bob"},
 	}
 
-	result := convertMessages([]Message{msg1, msg2})
+	result, err := convertMessages([]Message{msg1, msg2})
+	require.NoError(t, err)
 
 	// INVARIANT: Message ordering is preserved
 	require.Len(t, result, 2)
@@ -212,12 +220,13 @@ func TestConvertMessages_MultipleSigners(t *testing.T) {
 		Signers: []AccountName{"alice", "bob", "charlie"},
 	}
 
-	result := convertMessages([]Message{msg})
+	result, err := convertMessages([]Message{msg})
+	require.NoError(t, err)
 
 	require.Len(t, result, 1)
 
 	var data map[string][]string
-	err := json.Unmarshal(result[0].Data, &data)
+	err = json.Unmarshal(result[0].Data, &data)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alice", "bob", "charlie"}, data["signers"])
 }
@@ -363,8 +372,10 @@ func TestTransaction_ToSignDoc_Deterministic(t *testing.T) {
 	}
 
 	// Call ToSignDoc multiple times
-	signDoc1 := tx.ToSignDoc("test-chain", 42)
-	signDoc2 := tx.ToSignDoc("test-chain", 42)
+	signDoc1, err := tx.ToSignDoc("test-chain", 42)
+	require.NoError(t, err)
+	signDoc2, err := tx.ToSignDoc("test-chain", 42)
+	require.NoError(t, err)
 
 	// Serialize both to JSON
 	json1, err := signDoc1.ToJSON()
@@ -474,7 +485,8 @@ func TestTransaction_ToSignDoc_ExcludesAuthorization(t *testing.T) {
 		},
 	}
 
-	signDoc := tx.ToSignDoc("test-chain", 1)
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
 
 	// SignDoc should not have any Authorization-related fields
 	jsonBytes, err := signDoc.ToJSON()
