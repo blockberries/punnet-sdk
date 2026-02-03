@@ -210,6 +210,10 @@ func (sd *SignDoc) SetFeeSlippage(slippage SignDocRatio) {
 }
 
 // AddMessage appends a message to the SignDoc.
+//
+// PRECONDITION: data MUST be canonical JSON if deterministic signing is required.
+// Non-canonical JSON (e.g., {"b":1,"a":2}) will be preserved as-is, which may cause
+// signature mismatches across implementations that canonicalize message data.
 func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 	sd.Messages = append(sd.Messages, SignDocMessage{
 		Type: msgType,
@@ -280,7 +284,13 @@ func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
 		b.WriteString(`{"type":`)
 		b.WriteString(cramberry.EscapeJSONString(msg.Type))
 		b.WriteString(`,"data":`)
-		// Data is already canonical JSON (json.RawMessage), write it directly
+		// SECURITY: msg.Data is written directly without re-canonicalization.
+		// INVARIANT (caller responsibility): msg.Data MUST contain canonical JSON.
+		// If msg.Data contains non-canonical JSON (e.g., {"b":1,"a":2} instead of
+		// {"a":2,"b":1}), two semantically identical messages could produce different
+		// signatures. This is by design - re-canonicalization would add overhead and
+		// the message data typically comes from our own serialization code.
+		// See: https://github.com/blockberries/punnet-sdk/issues/96
 		if msg.Data == nil {
 			b.WriteString(`null`)
 		} else {
