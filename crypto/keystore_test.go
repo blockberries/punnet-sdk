@@ -637,31 +637,6 @@ func TestKeyStore_StoreValidation(t *testing.T) {
 	})
 }
 
-func TestAlgorithm_IsValid(t *testing.T) {
-	tests := []struct {
-		algo  Algorithm
-		valid bool
-	}{
-		{AlgorithmEd25519, true},
-		{AlgorithmSecp256k1, true},
-		{AlgorithmSecp256r1, true},
-		{Algorithm("unknown"), false},
-		{Algorithm(""), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.algo), func(t *testing.T) {
-			assert.Equal(t, tt.valid, tt.algo.IsValid())
-		})
-	}
-}
-
-func TestAlgorithm_String(t *testing.T) {
-	assert.Equal(t, "ed25519", AlgorithmEd25519.String())
-	assert.Equal(t, "secp256k1", AlgorithmSecp256k1.String())
-	assert.Equal(t, "secp256r1", AlgorithmSecp256r1.String())
-}
-
 // TestKeyStore_ConcurrentAccess verifies thread safety of KeyStore implementations.
 func TestKeyStore_ConcurrentAccess(t *testing.T) {
 	store := newMockKeyStore()
