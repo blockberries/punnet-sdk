@@ -351,16 +351,28 @@ func secp256k1PublicKeyFromBytes(data []byte) (PublicKey, error) {
 	return &secp256k1PublicKey{key: key}, nil
 }
 
-// secp256r1PublicKeyFromBytes creates a secp256r1 public key from compressed bytes (33 bytes).
+// secp256r1PublicKeyFromBytes creates a secp256r1 public key from bytes.
+// Accepts both compressed (33 bytes, 0x02/0x03 prefix) and uncompressed
+// (65 bytes, 0x04 prefix) formats for interoperability.
+//
+// Bytes() always returns compressed format (33 bytes) regardless of input format.
 func secp256r1PublicKeyFromBytes(data []byte) (PublicKey, error) {
-	if len(data) != 33 {
-		return nil, fmt.Errorf("invalid secp256r1 public key size: expected 33, got %d", len(data))
-	}
-
 	curve := elliptic.P256()
-	x, y := elliptic.UnmarshalCompressed(curve, data)
-	if x == nil {
-		return nil, fmt.Errorf("invalid secp256r1 public key: failed to decompress")
+	var x, y *big.Int
+
+	switch len(data) {
+	case 33: // Compressed format (0x02 or 0x03 prefix)
+		x, y = elliptic.UnmarshalCompressed(curve, data)
+		if x == nil {
+			return nil, fmt.Errorf("invalid secp256r1 public key: failed to decompress")
+		}
+	case 65: // Uncompressed format (0x04 prefix)
+		x, y = elliptic.Unmarshal(curve, data)
+		if x == nil {
+			return nil, fmt.Errorf("invalid secp256r1 public key: failed to parse uncompressed format")
+		}
+	default:
+		return nil, fmt.Errorf("invalid secp256r1 public key size: expected 33 or 65, got %d", len(data))
 	}
 
 	key := &ecdsa.PublicKey{
