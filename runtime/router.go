@@ -85,42 +85,38 @@ func (r *Router) RegisterModule(m Module) error {
 
 	// Register message handlers
 	msgHandlers := m.RegisterMsgHandlers()
-	if msgHandlers != nil {
-		for msgType, handler := range msgHandlers {
-			if msgType == "" {
-				return fmt.Errorf("empty message type in module %s", m.Name())
-			}
-			if handler == nil {
-				return fmt.Errorf("nil handler for message type %s in module %s", msgType, m.Name())
-			}
-
-			// Check for duplicate
-			if _, exists := r.msgHandlers[msgType]; exists {
-				return fmt.Errorf("duplicate handler for message type %s", msgType)
-			}
-
-			r.msgHandlers[msgType] = handler
+	for msgType, handler := range msgHandlers {
+		if msgType == "" {
+			return fmt.Errorf("empty message type in module %s", m.Name())
 		}
+		if handler == nil {
+			return fmt.Errorf("nil handler for message type %s in module %s", msgType, m.Name())
+		}
+
+		// Check for duplicate
+		if _, exists := r.msgHandlers[msgType]; exists {
+			return fmt.Errorf("duplicate handler for message type %s", msgType)
+		}
+
+		r.msgHandlers[msgType] = handler
 	}
 
 	// Register query handlers
 	queryHandlers := m.RegisterQueryHandlers()
-	if queryHandlers != nil {
-		for path, handler := range queryHandlers {
-			if path == "" {
-				return fmt.Errorf("empty query path in module %s", m.Name())
-			}
-			if handler == nil {
-				return fmt.Errorf("nil handler for query path %s in module %s", path, m.Name())
-			}
-
-			// Check for duplicate
-			if _, exists := r.queryHandlers[path]; exists {
-				return fmt.Errorf("duplicate handler for query path %s", path)
-			}
-
-			r.queryHandlers[path] = handler
+	for path, handler := range queryHandlers {
+		if path == "" {
+			return fmt.Errorf("empty query path in module %s", m.Name())
 		}
+		if handler == nil {
+			return fmt.Errorf("nil handler for query path %s in module %s", path, m.Name())
+		}
+
+		// Check for duplicate
+		if _, exists := r.queryHandlers[path]; exists {
+			return fmt.Errorf("duplicate handler for query path %s", path)
+		}
+
+		r.queryHandlers[path] = handler
 	}
 
 	// Store module reference

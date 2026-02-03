@@ -95,27 +95,23 @@ func ValidateModule(m Module) error {
 
 	// Validate message handlers
 	msgHandlers := m.RegisterMsgHandlers()
-	if msgHandlers != nil {
-		for msgType, handler := range msgHandlers {
-			if msgType == "" {
-				return fmt.Errorf("empty message type in handler map")
-			}
-			if handler == nil {
-				return fmt.Errorf("nil handler for message type %s", msgType)
-			}
+	for msgType, handler := range msgHandlers {
+		if msgType == "" {
+			return fmt.Errorf("empty message type in handler map")
+		}
+		if handler == nil {
+			return fmt.Errorf("nil handler for message type %s", msgType)
 		}
 	}
 
 	// Validate query handlers
 	queryHandlers := m.RegisterQueryHandlers()
-	if queryHandlers != nil {
-		for path, handler := range queryHandlers {
-			if path == "" {
-				return fmt.Errorf("empty path in query handler map")
-			}
-			if handler == nil {
-				return fmt.Errorf("nil handler for query path %s", path)
-			}
+	for path, handler := range queryHandlers {
+		if path == "" {
+			return fmt.Errorf("empty path in query handler map")
+		}
+		if handler == nil {
+			return fmt.Errorf("nil handler for query path %s", path)
 		}
 	}
 
