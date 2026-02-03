@@ -30,6 +30,11 @@ func (k *secp256k1PublicKey) Algorithm() Algorithm {
 }
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
+//
+// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
+// the signature (r, n-s) is also valid. This implementation does not enforce low-S
+// normalization. For consensus-critical applications where signature uniqueness matters,
+// consider canonicalizing signatures at the protocol layer.
 func (k *secp256k1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
@@ -124,6 +129,11 @@ func (k *secp256r1PublicKey) Algorithm() Algorithm {
 }
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
+//
+// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
+// the signature (r, n-s) is also valid. This implementation does not enforce low-S
+// normalization. For consensus-critical applications where signature uniqueness matters,
+// consider canonicalizing signatures at the protocol layer.
 func (k *secp256r1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
