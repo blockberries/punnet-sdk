@@ -12,6 +12,7 @@ import (
 //
 // INVARIANT: GasLimit is a non-negative value.
 // INVARIANT: Amount contains valid coins (non-empty denoms, valid amounts).
+// INVARIANT: Amount contains no duplicate denominations.
 type Fee struct {
 	// Amount is the fee amount as a collection of coins.
 	Amount Coins `json:"amount"`
@@ -39,6 +40,12 @@ type Ratio struct {
 //
 // INVARIANT: All coins in Amount MUST be valid (non-empty denom, denom <= 64 chars).
 // INVARIANT: Number of fee coins MUST NOT exceed MaxFeeCoins.
+// INVARIANT: Fee coins MUST contain no duplicate denominations.
+//
+// PROOF SKETCH (no duplicates): Duplicate denominations would cause ambiguity in
+// fee calculations downstream. If the same denom appears twice (e.g., {uatom: 1000},
+// {uatom: 2000}), the total fee for that denom is undefined. By rejecting duplicates
+// at validation time, we ensure Fee.Amount defines a unique mapping from denom to amount.
 //
 // SECURITY: This validation prevents malformed fees from entering the gossip layer.
 // Downstream components (e.g., ToSignDoc, fee deduction) assume valid fee structure.
@@ -48,11 +55,21 @@ func (f *Fee) ValidateBasic() error {
 		return fmt.Errorf("too many fee coins (%d > %d)", len(f.Amount), MaxFeeCoins)
 	}
 
-	// Validate each coin
+	// Track seen denominations for duplicate detection
+	// COMPLEXITY: O(n) time, O(n) space where n = len(Amount)
+	seenDenoms := make(map[string]struct{}, len(f.Amount))
+
+	// Validate each coin and check for duplicates
 	for i, coin := range f.Amount {
 		if !coin.IsValid() {
 			return fmt.Errorf("fee coin %d: invalid (empty or oversized denom)", i)
 		}
+
+		// Check for duplicate denomination
+		if _, exists := seenDenoms[coin.Denom]; exists {
+			return fmt.Errorf("fee coin %d: duplicate denomination %q", i, coin.Denom)
+		}
+		seenDenoms[coin.Denom] = struct{}{}
 	}
 
 	return nil
