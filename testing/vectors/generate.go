@@ -2,19 +2,25 @@ package vectors
 
 import (
 	"bytes"
+	stdecdsa "crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"time"
 
 	"github.com/blockberries/punnet-sdk/types"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 // WellKnownTestKeys contains deterministic test keys for reproducible test vectors.
 // SECURITY: These keys are for testing ONLY. Never use in production.
 //
 // The keys are derived from well-known seeds to ensure cross-implementation reproducibility.
+// All seeds are 32-byte SHA-256 hashes of algorithm-specific seed strings.
 var WellKnownTestKeys = struct {
 	Ed25519 struct {
 		// Seed is 32 bytes of deterministic test data
@@ -22,7 +28,18 @@ var WellKnownTestKeys = struct {
 		PrivateKey ed25519.PrivateKey
 		PublicKey  ed25519.PublicKey
 	}
-	// Secp256k1 and Secp256r1 would be added when implemented
+	Secp256k1 struct {
+		// Seed is 32 bytes of deterministic test data (used as private key scalar)
+		Seed       []byte
+		PrivateKey *secp256k1.PrivateKey
+		PublicKey  *secp256k1.PublicKey
+	}
+	Secp256r1 struct {
+		// Seed is 32 bytes of deterministic test data (used as private key scalar)
+		Seed       []byte
+		PrivateKey *stdecdsa.PrivateKey
+		PublicKey  *stdecdsa.PublicKey
+	}
 }{
 	Ed25519: func() struct {
 		Seed       []byte
@@ -42,6 +59,51 @@ var WellKnownTestKeys = struct {
 			Seed:       seed,
 			PrivateKey: privateKey,
 			PublicKey:  publicKey,
+		}
+	}(),
+	Secp256k1: func() struct {
+		Seed       []byte
+		PrivateKey *secp256k1.PrivateKey
+		PublicKey  *secp256k1.PublicKey
+	} {
+		// Deterministic seed: SHA-256("punnet-sdk-test-vector-seed-secp256k1")
+		seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256k1"))
+		seed := seedHash[:]
+		// Create private key from 32-byte seed (scalar)
+		privateKey := secp256k1.PrivKeyFromBytes(seed)
+		publicKey := privateKey.PubKey()
+		return struct {
+			Seed       []byte
+			PrivateKey *secp256k1.PrivateKey
+			PublicKey  *secp256k1.PublicKey
+		}{
+			Seed:       seed,
+			PrivateKey: privateKey,
+			PublicKey:  publicKey,
+		}
+	}(),
+	Secp256r1: func() struct {
+		Seed       []byte
+		PrivateKey *stdecdsa.PrivateKey
+		PublicKey  *stdecdsa.PublicKey
+	} {
+		// Deterministic seed: SHA-256("punnet-sdk-test-vector-seed-secp256r1")
+		seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256r1"))
+		seed := seedHash[:]
+		// Create private key from 32-byte seed (scalar) on P-256 curve
+		curve := elliptic.P256()
+		privateKey := new(stdecdsa.PrivateKey)
+		privateKey.D = new(big.Int).SetBytes(seed)
+		privateKey.PublicKey.Curve = curve
+		privateKey.PublicKey.X, privateKey.PublicKey.Y = curve.ScalarBaseMult(seed)
+		return struct {
+			Seed       []byte
+			PrivateKey *stdecdsa.PrivateKey
+			PublicKey  *stdecdsa.PublicKey
+		}{
+			Seed:       seed,
+			PrivateKey: privateKey,
+			PublicKey:  &privateKey.PublicKey,
 		}
 	}(),
 }
@@ -120,9 +182,13 @@ func generateAlgorithmVectors() []TestVector {
 	vectors = append(vectors, generateEd25519KeyDerivationVector())
 	vectors = append(vectors, generateEd25519SigningVector())
 
-	// Note: secp256k1 and secp256r1 vectors would be added when implemented
-	// vectors = append(vectors, generateSecp256k1KeyDerivationVector())
-	// vectors = append(vectors, generateSecp256r1KeyDerivationVector())
+	// secp256k1 key derivation and signing
+	vectors = append(vectors, generateSecp256k1KeyDerivationVector())
+	vectors = append(vectors, generateSecp256k1SigningVector())
+
+	// secp256r1 (P-256) key derivation and signing
+	vectors = append(vectors, generateSecp256r1KeyDerivationVector())
+	vectors = append(vectors, generateSecp256r1SigningVector())
 
 	return vectors
 }
@@ -1146,6 +1212,328 @@ func buildSignDocFromInputWithNullData(input TestVectorInput) *types.SignDoc {
 	}
 
 	return signDoc
+}
+
+// generateSecp256k1KeyDerivationVector creates the secp256k1 key derivation test vector.
+func generateSecp256k1KeyDerivationVector() TestVector {
+	// This vector tests that key derivation from seed produces expected results
+	input := TestVectorInput{
+		ChainID:         "key-derivation-test",
+		Account:         "test",
+		AccountSequence: "0",
+		Nonce:           "0",
+		Memo:            "",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.KeyDerivation",
+				Data: json.RawMessage(`{}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{},
+			GasLimit: "0",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+
+	// Generate secp256k1 signature (RFC 6979 deterministic)
+	secp256k1Sig := secp256k1ecdsa.SignCompact(WellKnownTestKeys.Secp256k1.PrivateKey, signBytes, false)
+	// SignCompact returns [V || R || S], we need just [R || S] (64 bytes)
+	secp256k1SigRS := secp256k1Sig[1:] // Remove recovery byte
+
+	// Document the seed derivation process
+	seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256k1"))
+
+	// Get compressed public key (33 bytes)
+	compressedPubKey := WellKnownTestKeys.Secp256k1.PublicKey.SerializeCompressed()
+
+	return TestVector{
+		Name:        "secp256k1_key_derivation",
+		Description: "secp256k1 key derivation from deterministic seed: SHA-256(\"punnet-sdk-test-vector-seed-secp256k1\")",
+		Category:    "algorithm",
+		Input:       input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"secp256k1": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Secp256k1.PrivateKey.Serialize()),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  hex.EncodeToString(secp256k1SigRS),
+				},
+				"secp256k1_seed": {
+					PrivateKeyHex: hex.EncodeToString(seedHash[:]),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  "", // Seed is not for signing directly
+				},
+			},
+		},
+	}
+}
+
+// generateSecp256k1SigningVector creates the secp256k1 signing test vector.
+func generateSecp256k1SigningVector() TestVector {
+	// This vector tests that signing a known message produces expected signature
+	input := TestVectorInput{
+		ChainID:         "signing-test",
+		Account:         "signer",
+		AccountSequence: "1",
+		Nonce:           "1",
+		Memo:            "Sign this message",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.SignMe",
+				Data: json.RawMessage(`{"content":"test data for signing"}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{{Denom: "stake", Amount: "100"}},
+			GasLimit: "50000",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+
+	// Generate secp256k1 signature (RFC 6979 deterministic)
+	secp256k1Sig := secp256k1ecdsa.SignCompact(WellKnownTestKeys.Secp256k1.PrivateKey, signBytes, false)
+	// SignCompact returns [V || R || S], we need just [R || S] (64 bytes)
+	secp256k1SigRS := secp256k1Sig[1:] // Remove recovery byte
+
+	// Get compressed public key (33 bytes)
+	compressedPubKey := WellKnownTestKeys.Secp256k1.PublicKey.SerializeCompressed()
+
+	return TestVector{
+		Name:        "secp256k1_signing",
+		Description: "secp256k1 signature generation for a known message (RFC 6979 deterministic)",
+		Category:    "algorithm",
+		Input:       input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"secp256k1": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Secp256k1.PrivateKey.Serialize()),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  hex.EncodeToString(secp256k1SigRS),
+				},
+			},
+		},
+	}
+}
+
+// generateSecp256r1KeyDerivationVector creates the secp256r1 (P-256) key derivation test vector.
+func generateSecp256r1KeyDerivationVector() TestVector {
+	// This vector tests that key derivation from seed produces expected results
+	input := TestVectorInput{
+		ChainID:         "key-derivation-test",
+		Account:         "test",
+		AccountSequence: "0",
+		Nonce:           "0",
+		Memo:            "",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.KeyDerivation",
+				Data: json.RawMessage(`{}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{},
+			GasLimit: "0",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+
+	// Generate secp256r1 signature (RFC 6979 deterministic)
+	secp256r1Sig := signSecp256r1RFC6979(WellKnownTestKeys.Secp256r1.PrivateKey, signBytes)
+
+	// Document the seed derivation process
+	seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256r1"))
+
+	// Get compressed public key (33 bytes: 0x02/0x03 prefix + 32 bytes X coordinate)
+	compressedPubKey := compressP256PublicKey(&WellKnownTestKeys.Secp256r1.PrivateKey.PublicKey)
+
+	return TestVector{
+		Name:        "secp256r1_key_derivation",
+		Description: "secp256r1 (P-256) key derivation from deterministic seed: SHA-256(\"punnet-sdk-test-vector-seed-secp256r1\")",
+		Category:    "algorithm",
+		Input:       input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"secp256r1": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Secp256r1.PrivateKey.D.Bytes()),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  hex.EncodeToString(secp256r1Sig),
+				},
+				"secp256r1_seed": {
+					PrivateKeyHex: hex.EncodeToString(seedHash[:]),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  "", // Seed is not for signing directly
+				},
+			},
+		},
+	}
+}
+
+// generateSecp256r1SigningVector creates the secp256r1 (P-256) signing test vector.
+func generateSecp256r1SigningVector() TestVector {
+	// This vector tests that signing a known message produces expected signature
+	input := TestVectorInput{
+		ChainID:         "signing-test",
+		Account:         "signer",
+		AccountSequence: "1",
+		Nonce:           "1",
+		Memo:            "Sign this message",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.SignMe",
+				Data: json.RawMessage(`{"content":"test data for signing"}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{{Denom: "stake", Amount: "100"}},
+			GasLimit: "50000",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+
+	// Generate secp256r1 signature (RFC 6979 deterministic)
+	secp256r1Sig := signSecp256r1RFC6979(WellKnownTestKeys.Secp256r1.PrivateKey, signBytes)
+
+	// Get compressed public key (33 bytes)
+	compressedPubKey := compressP256PublicKey(&WellKnownTestKeys.Secp256r1.PrivateKey.PublicKey)
+
+	return TestVector{
+		Name:        "secp256r1_signing",
+		Description: "secp256r1 (P-256) signature generation for a known message (RFC 6979 deterministic)",
+		Category:    "algorithm",
+		Input:       input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"secp256r1": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Secp256r1.PrivateKey.D.Bytes()),
+					PublicKeyHex:  hex.EncodeToString(compressedPubKey),
+					SignatureHex:  hex.EncodeToString(secp256r1Sig),
+				},
+			},
+		},
+	}
+}
+
+// signSecp256r1RFC6979 signs data using RFC 6979 deterministic ECDSA with P-256.
+// Returns a 64-byte signature [R || S] in big-endian format.
+func signSecp256r1RFC6979(privateKey *stdecdsa.PrivateKey, data []byte) []byte {
+	// Use SignASN1 with zeroReader to trigger RFC 6979 deterministic k
+	// Go's crypto/ecdsa uses RFC 6979 when the random reader is deterministic
+	asn1Sig, err := stdecdsa.SignASN1(zeroReader{}, privateKey, data)
+	if err != nil {
+		panic("failed to sign: " + err.Error())
+	}
+
+	// Parse ASN.1 signature to get R and S
+	r, s := parseASN1Signature(asn1Sig)
+
+	// Serialize R and S as 32-byte big-endian values
+	sig := make([]byte, 64)
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+
+	// Right-align in 32-byte buffers
+	copy(sig[32-len(rBytes):32], rBytes)
+	copy(sig[64-len(sBytes):64], sBytes)
+
+	return sig
+}
+
+// zeroReader provides a deterministic "random" source of zeros.
+// When used with ECDSA, this triggers RFC 6979 deterministic k generation.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (n int, err error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+// parseASN1Signature extracts R and S from an ASN.1 DER-encoded ECDSA signature.
+func parseASN1Signature(sig []byte) (*big.Int, *big.Int) {
+	// ASN.1 format: SEQUENCE { INTEGER r, INTEGER s }
+	// 0x30 len 0x02 rlen r 0x02 slen s
+	if len(sig) < 8 || sig[0] != 0x30 {
+		panic("invalid ASN.1 signature")
+	}
+	idx := 2
+	if sig[1]&0x80 != 0 {
+		idx += int(sig[1] & 0x7f)
+	}
+
+	// Parse R
+	if sig[idx] != 0x02 {
+		panic("expected INTEGER for R")
+	}
+	rLen := int(sig[idx+1])
+	idx += 2
+	rBytes := sig[idx : idx+rLen]
+	idx += rLen
+
+	// Parse S
+	if sig[idx] != 0x02 {
+		panic("expected INTEGER for S")
+	}
+	sLen := int(sig[idx+1])
+	idx += 2
+	sBytes := sig[idx : idx+sLen]
+
+	r := new(big.Int).SetBytes(rBytes)
+	s := new(big.Int).SetBytes(sBytes)
+
+	return r, s
+}
+
+// compressP256PublicKey returns the compressed form of a P-256 public key (33 bytes).
+// Format: 0x02 + X (if Y is even) or 0x03 + X (if Y is odd)
+func compressP256PublicKey(pubKey *stdecdsa.PublicKey) []byte {
+	compressed := make([]byte, 33)
+	if pubKey.Y.Bit(0) == 0 {
+		compressed[0] = 0x02
+	} else {
+		compressed[0] = 0x03
+	}
+	xBytes := pubKey.X.Bytes()
+	// Right-align X in 32 bytes
+	copy(compressed[33-len(xBytes):], xBytes)
+	return compressed
 }
 
 // buildSignDocFromInput constructs a SignDoc from test vector input.

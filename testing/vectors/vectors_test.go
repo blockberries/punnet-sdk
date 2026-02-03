@@ -1,14 +1,19 @@
 package vectors
 
 import (
+	stdecdsa "crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/blockberries/punnet-sdk/types"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,9 +77,15 @@ func verifySignatureVector(t *testing.T, algoName string, sigVector TestVectorSi
 		// This is seed information only, not a signature to verify
 		t.Log("Seed vector - no signature to verify")
 	case "secp256k1":
-		t.Skip("secp256k1 not yet implemented")
+		verifySecp256k1Signature(t, sigVector, signBytes)
+	case "secp256k1_seed":
+		// This is seed information only, not a signature to verify
+		t.Log("Seed vector - no signature to verify")
 	case "secp256r1":
-		t.Skip("secp256r1 not yet implemented")
+		verifySecp256r1Signature(t, sigVector, signBytes)
+	case "secp256r1_seed":
+		// This is seed information only, not a signature to verify
+		t.Log("Seed vector - no signature to verify")
 	default:
 		t.Errorf("unknown algorithm: %s", algoName)
 	}
@@ -126,6 +137,161 @@ func verifyEd25519Signature(t *testing.T, sigVector TestVectorSignature, signByt
 	assert.True(t, valid, "signature should verify successfully")
 }
 
+// verifySecp256k1Signature verifies a secp256k1 signature.
+func verifySecp256k1Signature(t *testing.T, sigVector TestVectorSignature, signBytes []byte) {
+	t.Helper()
+
+	// Skip if signature is empty (e.g., seed vectors)
+	if sigVector.SignatureHex == "" {
+		return
+	}
+
+	// Decode keys
+	privateKeyBytes, err := hex.DecodeString(sigVector.PrivateKeyHex)
+	require.NoError(t, err, "should decode private key")
+
+	publicKeyBytes, err := hex.DecodeString(sigVector.PublicKeyHex)
+	require.NoError(t, err, "should decode public key")
+
+	signatureBytes, err := hex.DecodeString(sigVector.SignatureHex)
+	require.NoError(t, err, "should decode signature")
+
+	// Verify key sizes
+	assert.Equal(t, 32, len(privateKeyBytes),
+		"private key should be 32 bytes")
+	assert.Equal(t, 33, len(publicKeyBytes),
+		"public key should be 33 bytes (compressed)")
+	assert.Equal(t, 64, len(signatureBytes),
+		"signature should be 64 bytes (R || S)")
+
+	// Create private key
+	privateKey := secp256k1.PrivKeyFromBytes(privateKeyBytes)
+
+	// Verify public key derivation
+	derivedPubKey := privateKey.PubKey()
+	derivedCompressed := derivedPubKey.SerializeCompressed()
+	assert.Equal(t, publicKeyBytes, derivedCompressed,
+		"public key should be derivable from private key")
+
+	// Parse the public key for verification
+	pubKey, err := secp256k1.ParsePubKey(publicKeyBytes)
+	require.NoError(t, err, "should parse public key")
+
+	// The signature is R || S format - convert to secp256k1 signature
+	r := new(secp256k1.ModNScalar)
+	r.SetByteSlice(signatureBytes[:32])
+	s := new(secp256k1.ModNScalar)
+	s.SetByteSlice(signatureBytes[32:])
+	sig := secp256k1ecdsa.NewSignature(r, s)
+
+	// Verify signature
+	valid := sig.Verify(signBytes, pubKey)
+	assert.True(t, valid, "signature should verify successfully")
+}
+
+// verifySecp256r1Signature verifies a secp256r1 (P-256) signature.
+func verifySecp256r1Signature(t *testing.T, sigVector TestVectorSignature, signBytes []byte) {
+	t.Helper()
+
+	// Skip if signature is empty (e.g., seed vectors)
+	if sigVector.SignatureHex == "" {
+		return
+	}
+
+	// Decode keys
+	privateKeyBytes, err := hex.DecodeString(sigVector.PrivateKeyHex)
+	require.NoError(t, err, "should decode private key")
+
+	publicKeyBytes, err := hex.DecodeString(sigVector.PublicKeyHex)
+	require.NoError(t, err, "should decode public key")
+
+	signatureBytes, err := hex.DecodeString(sigVector.SignatureHex)
+	require.NoError(t, err, "should decode signature")
+
+	// Verify key sizes
+	assert.Equal(t, 32, len(privateKeyBytes),
+		"private key should be 32 bytes")
+	assert.Equal(t, 33, len(publicKeyBytes),
+		"public key should be 33 bytes (compressed)")
+	assert.Equal(t, 64, len(signatureBytes),
+		"signature should be 64 bytes (R || S)")
+
+	// Create private key
+	curve := elliptic.P256()
+	privateKey := new(stdecdsa.PrivateKey)
+	privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
+	privateKey.PublicKey.Curve = curve
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = curve.ScalarBaseMult(privateKeyBytes)
+
+	// Verify public key derivation (compress and compare)
+	derivedCompressed := compressP256PublicKey(&privateKey.PublicKey)
+	assert.Equal(t, publicKeyBytes, derivedCompressed,
+		"public key should be derivable from private key")
+
+	// Parse R and S from signature
+	r := new(big.Int).SetBytes(signatureBytes[:32])
+	s := new(big.Int).SetBytes(signatureBytes[32:])
+
+	// Decompress public key for verification
+	pubKey := decompressP256PublicKey(publicKeyBytes)
+	require.NotNil(t, pubKey, "should decompress public key")
+
+	// Verify signature
+	valid := stdecdsa.Verify(pubKey, signBytes, r, s)
+	assert.True(t, valid, "signature should verify successfully")
+}
+
+// decompressP256PublicKey decompresses a 33-byte compressed P-256 public key.
+func decompressP256PublicKey(compressed []byte) *stdecdsa.PublicKey {
+	if len(compressed) != 33 {
+		return nil
+	}
+
+	prefix := compressed[0]
+	if prefix != 0x02 && prefix != 0x03 {
+		return nil
+	}
+
+	curve := elliptic.P256()
+	x := new(big.Int).SetBytes(compressed[1:])
+
+	// Calculate y² = x³ - 3x + b (mod p)
+	// For P-256: p is the field prime, b is the curve parameter
+	p := curve.Params().P
+	b := curve.Params().B
+
+	// y² = x³ + ax + b where a = -3 for P-256
+	x3 := new(big.Int).Mul(x, x)
+	x3.Mul(x3, x)
+	x3.Mod(x3, p)
+
+	threeX := new(big.Int).Mul(x, big.NewInt(3))
+	threeX.Mod(threeX, p)
+
+	y2 := new(big.Int).Sub(x3, threeX)
+	y2.Add(y2, b)
+	y2.Mod(y2, p)
+
+	// y = sqrt(y²) mod p
+	y := new(big.Int).ModSqrt(y2, p)
+	if y == nil {
+		return nil
+	}
+
+	// Select correct y based on prefix
+	if prefix == 0x02 && y.Bit(0) != 0 {
+		y.Sub(p, y)
+	} else if prefix == 0x03 && y.Bit(0) == 0 {
+		y.Sub(p, y)
+	}
+
+	return &stdecdsa.PublicKey{
+		Curve: curve,
+		X:     x,
+		Y:     y,
+	}
+}
+
 // TestVectorDeterminism verifies that generating vectors twice produces identical results.
 func TestVectorDeterminism(t *testing.T) {
 	vectors1, err := GenerateTestVectors()
@@ -173,6 +339,47 @@ func TestWellKnownTestKeys(t *testing.T) {
 		derivedPubKey := derivedKey.Public().(ed25519.PublicKey)
 		assert.Equal(t, []byte(WellKnownTestKeys.Ed25519.PublicKey), []byte(derivedPubKey),
 			"public key should match")
+	})
+
+	// Verify secp256k1 key derivation
+	t.Run("secp256k1_key_derivation", func(t *testing.T) {
+		// The seed should be deterministic
+		seed := WellKnownTestKeys.Secp256k1.Seed
+		assert.Len(t, seed, 32, "secp256k1 seed should be 32 bytes")
+
+		// Deriving a key from the seed should produce the same key
+		derivedKey := secp256k1.PrivKeyFromBytes(seed)
+		assert.Equal(t, WellKnownTestKeys.Secp256k1.PrivateKey.Serialize(), derivedKey.Serialize(),
+			"key derivation should be reproducible")
+
+		// The public key should match
+		derivedPubKey := derivedKey.PubKey()
+		assert.Equal(t, WellKnownTestKeys.Secp256k1.PublicKey.SerializeCompressed(),
+			derivedPubKey.SerializeCompressed(),
+			"public key should match")
+	})
+
+	// Verify secp256r1 key derivation
+	t.Run("secp256r1_key_derivation", func(t *testing.T) {
+		// The seed should be deterministic
+		seed := WellKnownTestKeys.Secp256r1.Seed
+		assert.Len(t, seed, 32, "secp256r1 seed should be 32 bytes")
+
+		// Deriving a key from the seed should produce the same key
+		curve := elliptic.P256()
+		derivedKey := new(stdecdsa.PrivateKey)
+		derivedKey.D = new(big.Int).SetBytes(seed)
+		derivedKey.PublicKey.Curve = curve
+		derivedKey.PublicKey.X, derivedKey.PublicKey.Y = curve.ScalarBaseMult(seed)
+
+		assert.Equal(t, WellKnownTestKeys.Secp256r1.PrivateKey.D.Bytes(), derivedKey.D.Bytes(),
+			"key derivation should be reproducible")
+
+		// The public key should match
+		assert.Equal(t, WellKnownTestKeys.Secp256r1.PublicKey.X.Bytes(), derivedKey.PublicKey.X.Bytes(),
+			"public key X should match")
+		assert.Equal(t, WellKnownTestKeys.Secp256r1.PublicKey.Y.Bytes(), derivedKey.PublicKey.Y.Bytes(),
+			"public key Y should match")
 	})
 }
 

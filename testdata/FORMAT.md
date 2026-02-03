@@ -243,17 +243,55 @@ For key derivation vectors, an additional `ed25519_seed` entry may be present co
 
 This distinction is important for cross-implementation testing: some libraries expose only the seed, while others use the expanded form. The seed can always be expanded to the full private key using standard Ed25519 key derivation.
 
-### secp256k1 (Future)
+### secp256k1
 
 - Key size: 33 bytes (compressed public), 32 bytes (private)
-- Signature size: 64 bytes (r||s format)
+- Signature size: 64 bytes (R || S format, big-endian)
 - Deterministic signatures: RFC 6979
 
-### secp256r1 (Future)
+**Key Format Notes**:
+
+The secp256k1 keys use **compressed public key format** (SEC1):
+- Public key: `0x02` or `0x03` prefix (1 byte) + X coordinate (32 bytes) = 33 bytes
+- Private key: 32-byte scalar
+- Signature: 64 bytes (R || S concatenated, each 32 bytes big-endian)
+
+**Key Derivation**:
+```
+seed = SHA-256("punnet-sdk-test-vector-seed-secp256k1")
+private_key = secp256k1.PrivateKeyFromScalar(seed)
+public_key = private_key.PubKey().SerializeCompressed()
+```
+
+For key derivation vectors, a `secp256k1_seed` entry documents the 32-byte seed.
+
+### secp256r1 (P-256/prime256v1)
 
 - Key size: 33 bytes (compressed public), 32 bytes (private)
-- Signature size: 64 bytes (r||s format)
+- Signature size: 64 bytes (R || S format, big-endian)
 - Deterministic signatures: RFC 6979
+
+**Key Format Notes**:
+
+The secp256r1 (P-256) keys use **compressed public key format** (SEC1):
+- Public key: `0x02` or `0x03` prefix (1 byte) + X coordinate (32 bytes) = 33 bytes
+- Private key: 32-byte scalar
+- Signature: 64 bytes (R || S concatenated, each 32 bytes big-endian)
+
+**Key Derivation**:
+```
+seed = SHA-256("punnet-sdk-test-vector-seed-secp256r1")
+private_key = P256.PrivateKeyFromScalar(seed)
+public_key = Compress(private_key.PublicKey())
+```
+
+For key derivation vectors, a `secp256r1_seed` entry documents the 32-byte seed.
+
+**Compressed Public Key Format** (for both secp256k1 and secp256r1):
+```
+If Y coordinate is even: 0x02 || X (33 bytes total)
+If Y coordinate is odd:  0x03 || X (33 bytes total)
+```
 
 ## Test Vector Categories
 
