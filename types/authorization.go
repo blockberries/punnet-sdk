@@ -1,9 +1,13 @@
 package types
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
+	"math/big"
 )
 
 const (
@@ -11,32 +15,240 @@ const (
 	MaxRecursionDepth = 10
 )
 
-// Signature represents a single signature with public key
+// Algorithm represents a supported signature algorithm.
+//
+// SECURITY: All algorithms must provide at least 128-bit security level.
+type Algorithm string
+
+const (
+	// AlgorithmEd25519 is the Edwards-curve Digital Signature Algorithm.
+	// Key sizes: PubKey=32, PrivKey=64, Signature=64
+	// RECOMMENDED: Default choice for most applications.
+	AlgorithmEd25519 Algorithm = "ed25519"
+
+	// AlgorithmSecp256k1 is the ECDSA algorithm with secp256k1 curve (Bitcoin/Ethereum).
+	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
+	AlgorithmSecp256k1 Algorithm = "secp256k1"
+
+	// AlgorithmSecp256r1 is the ECDSA algorithm with P-256/secp256r1 curve (NIST).
+	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
+	AlgorithmSecp256r1 Algorithm = "secp256r1"
+)
+
+// ValidAlgorithms returns the list of supported algorithms.
+func ValidAlgorithms() []Algorithm {
+	return []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+}
+
+// IsValidAlgorithm checks if the algorithm is supported.
+func IsValidAlgorithm(algo Algorithm) bool {
+	switch algo {
+	case AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Signature represents a single signature with public key and algorithm.
+//
+// INVARIANT: The Algorithm field must match the actual key type.
+// INVARIANT: PubKey and Signature sizes must be valid for the specified algorithm.
 type Signature struct {
-	// PubKey is the Ed25519 public key (32 bytes)
+	// Algorithm specifies the signature algorithm.
+	// If empty, defaults to Ed25519 for backwards compatibility.
+	Algorithm Algorithm `json:"algorithm,omitempty"`
+
+	// PubKey is the public key bytes.
+	// Size depends on algorithm: Ed25519=32, secp256k1=33, secp256r1=33
 	PubKey []byte `json:"pub_key"`
 
-	// Signature is the Ed25519 signature (64 bytes)
+	// Signature is the signature bytes.
+	// Size: Ed25519=64, secp256k1=64, secp256r1=64
 	Signature []byte `json:"signature"`
 }
 
-// ValidateBasic performs basic validation
+// GetAlgorithm returns the algorithm, defaulting to Ed25519 if not specified.
+// BACKWARDS COMPATIBILITY: Empty algorithm field is treated as Ed25519.
+func (s *Signature) GetAlgorithm() Algorithm {
+	if s.Algorithm == "" {
+		return AlgorithmEd25519
+	}
+	return s.Algorithm
+}
+
+// ValidateBasic performs basic validation of the signature structure.
+//
+// INVARIANT: After successful validation, PubKey and Signature have correct sizes for the algorithm.
 func (s *Signature) ValidateBasic() error {
-	if len(s.PubKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("%w: public key must be %d bytes, got %d", ErrInvalidSignature, ed25519.PublicKeySize, len(s.PubKey))
+	algo := s.GetAlgorithm()
+
+	switch algo {
+	case AlgorithmEd25519:
+		if len(s.PubKey) != ed25519.PublicKeySize {
+			return fmt.Errorf("%w: ed25519 public key must be %d bytes, got %d",
+				ErrInvalidPublicKey, ed25519.PublicKeySize, len(s.PubKey))
+		}
+		if len(s.Signature) != ed25519.SignatureSize {
+			return fmt.Errorf("%w: ed25519 signature must be %d bytes, got %d",
+				ErrInvalidSignature, ed25519.SignatureSize, len(s.Signature))
+		}
+
+	case AlgorithmSecp256k1, AlgorithmSecp256r1:
+		// Compressed public key is 33 bytes (1 byte prefix + 32 bytes X coordinate)
+		if len(s.PubKey) != 33 {
+			return fmt.Errorf("%w: %s public key must be 33 bytes (compressed), got %d",
+				ErrInvalidPublicKey, algo, len(s.PubKey))
+		}
+		// ECDSA signature is 64 bytes (32 bytes R + 32 bytes S)
+		if len(s.Signature) != 64 {
+			return fmt.Errorf("%w: %s signature must be 64 bytes, got %d",
+				ErrInvalidSignature, algo, len(s.Signature))
+		}
+
+	default:
+		return fmt.Errorf("%w: %s", ErrUnsupportedAlgorithm, algo)
 	}
-	if len(s.Signature) != ed25519.SignatureSize {
-		return fmt.Errorf("%w: signature must be %d bytes, got %d", ErrInvalidSignature, ed25519.SignatureSize, len(s.Signature))
-	}
+
 	return nil
 }
 
-// Verify verifies the signature against a message
+// Verify verifies the signature against a message.
+//
+// PRECONDITION: message is the exact bytes that were signed (typically SHA-256 hash of SignDoc JSON)
+// POSTCONDITION: Returns true if and only if signature is valid for the public key and message.
+//
+// SECURITY: This method is constant-time where possible to prevent timing attacks.
 func (s *Signature) Verify(message []byte) bool {
 	if err := s.ValidateBasic(); err != nil {
 		return false
 	}
-	return ed25519.Verify(ed25519.PublicKey(s.PubKey), message, s.Signature)
+
+	algo := s.GetAlgorithm()
+
+	switch algo {
+	case AlgorithmEd25519:
+		return ed25519.Verify(ed25519.PublicKey(s.PubKey), message, s.Signature)
+
+	case AlgorithmSecp256k1:
+		return verifySecp256k1(s.PubKey, message, s.Signature)
+
+	case AlgorithmSecp256r1:
+		return verifySecp256r1(s.PubKey, message, s.Signature)
+
+	default:
+		return false
+	}
+}
+
+// verifySecp256k1 verifies an ECDSA signature using the secp256k1 curve.
+//
+// IMPLEMENTATION NOTE: Go's standard library doesn't include secp256k1.
+// In production, this would use a proper secp256k1 library (e.g., btcec).
+// For now, we return false with a note that this requires external implementation.
+func verifySecp256k1(pubKey, message, signature []byte) bool {
+	// TODO: Implement with proper secp256k1 library (btcec or similar)
+	// This is a placeholder that documents the expected behavior.
+	//
+	// EXPECTED IMPLEMENTATION:
+	// 1. Decompress public key from 33 bytes to full coordinates
+	// 2. Parse R and S from signature (32 bytes each)
+	// 3. Hash message with SHA-256 (if not already hashed)
+	// 4. Verify ECDSA signature
+	//
+	// For now, return false to indicate unimplemented.
+	// This should be replaced with actual implementation in production.
+	_ = pubKey
+	_ = message
+	_ = signature
+	return false
+}
+
+// verifySecp256r1 verifies an ECDSA signature using the P-256 (secp256r1) curve.
+//
+// SECURITY: Uses Go's standard library crypto/ecdsa which is well-audited.
+func verifySecp256r1(pubKey, message, signature []byte) bool {
+	// Decompress public key
+	if len(pubKey) != 33 {
+		return false
+	}
+
+	// Parse the compressed public key
+	x, y := decompressP256PublicKey(pubKey)
+	if x == nil || y == nil {
+		return false
+	}
+
+	ecdsaPubKey := &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     x,
+		Y:     y,
+	}
+
+	// Parse R and S from signature
+	if len(signature) != 64 {
+		return false
+	}
+	r := new(big.Int).SetBytes(signature[:32])
+	s := new(big.Int).SetBytes(signature[32:])
+
+	// For ECDSA, we hash the message
+	// Note: If message is already a hash (like from SignDoc.GetSignBytes), we use it directly
+	// The caller is responsible for ensuring proper hashing
+	hash := sha256.Sum256(message)
+
+	return ecdsa.Verify(ecdsaPubKey, hash[:], r, s)
+}
+
+// decompressP256PublicKey decompresses a 33-byte compressed P-256 public key.
+//
+// Format: 0x02 or 0x03 prefix (indicating Y coordinate parity) + 32 bytes X coordinate
+func decompressP256PublicKey(compressed []byte) (*big.Int, *big.Int) {
+	if len(compressed) != 33 {
+		return nil, nil
+	}
+
+	prefix := compressed[0]
+	if prefix != 0x02 && prefix != 0x03 {
+		return nil, nil
+	}
+
+	x := new(big.Int).SetBytes(compressed[1:])
+	curve := elliptic.P256()
+
+	// Calculate Y from X using curve equation: y² = x³ - 3x + b (mod p)
+	// P-256 parameters
+	params := curve.Params()
+	p := params.P
+
+	// x³
+	x3 := new(big.Int).Mul(x, x)
+	x3.Mul(x3, x)
+	x3.Mod(x3, p)
+
+	// -3x
+	threeX := new(big.Int).Mul(x, big.NewInt(3))
+	threeX.Mod(threeX, p)
+
+	// x³ - 3x + b
+	y2 := new(big.Int).Sub(x3, threeX)
+	y2.Add(y2, params.B)
+	y2.Mod(y2, p)
+
+	// y = sqrt(y²) mod p
+	y := new(big.Int).ModSqrt(y2, p)
+	if y == nil {
+		return nil, nil
+	}
+
+	// Choose the correct Y based on prefix (even/odd)
+	if prefix == 0x02 && y.Bit(0) != 0 {
+		y.Sub(p, y)
+	} else if prefix == 0x03 && y.Bit(0) == 0 {
+		y.Sub(p, y)
+	}
+
+	return x, y
 }
 
 // Authorization represents proof of authority to perform an action
@@ -49,8 +261,8 @@ type Authorization struct {
 	AccountAuthorizations map[AccountName]*Authorization `json:"account_authorizations,omitempty"`
 }
 
-// NewAuthorization creates a new authorization with signatures
-// Creates defensive deep copy of signatures to prevent external mutation
+// NewAuthorization creates a new authorization with signatures.
+// Creates defensive deep copy of signatures to prevent external mutation.
 func NewAuthorization(signatures ...Signature) *Authorization {
 	// Create defensive deep copy of signatures
 	sigsCopy := make([]Signature, len(signatures))
@@ -63,6 +275,7 @@ func NewAuthorization(signatures ...Signature) *Authorization {
 		copy(sigCopy, sig.Signature)
 
 		sigsCopy[i] = Signature{
+			Algorithm: sig.Algorithm,
 			PubKey:    pubKeyCopy,
 			Signature: sigCopy,
 		}

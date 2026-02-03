@@ -6,12 +6,8 @@ import (
 	"sync"
 )
 
-// Key name constraints.
+// Key signing constraints.
 const (
-	// MaxKeyNameLength is the maximum allowed length for a key name.
-	// Prevents resource exhaustion attacks.
-	MaxKeyNameLength = 256
-
 	// MaxSignDataLength is the maximum allowed input length for Sign.
 	// Ed25519 handles any length, but we cap for consistency with future backends.
 	// 64MB should handle any reasonable signing use case.
@@ -20,32 +16,18 @@ const (
 
 // Keyring error types.
 var (
-	ErrKeyNotFound      = errors.New("key not found")
-	ErrKeyExists        = errors.New("key already exists")
-	ErrInvalidPassword  = errors.New("invalid password")
-	ErrInvalidKey       = errors.New("invalid key data")
-	ErrInvalidKeyName   = errors.New("invalid key name")
-	ErrDataTooLarge     = errors.New("data exceeds maximum sign length")
+	ErrKeyNotFound     = errors.New("key not found")
+	ErrKeyExists       = errors.New("key already exists")
+	ErrInvalidPassword = errors.New("invalid password")
+	ErrInvalidKey      = errors.New("invalid key data")
+	ErrDataTooLarge    = errors.New("data exceeds maximum sign length")
 )
 
 // validateKeyName validates a key name for security.
-// Rejects empty names, overly long names, and names with dangerous characters.
+// Uses the shared ValidateKeyName function from keystore.go.
 // Complexity: O(n) where n is name length.
 func validateKeyName(name string) error {
-	if name == "" {
-		return fmt.Errorf("%w: name cannot be empty", ErrInvalidKeyName)
-	}
-	if len(name) > MaxKeyNameLength {
-		return fmt.Errorf("%w: name too long (max %d characters)", ErrInvalidKeyName, MaxKeyNameLength)
-	}
-	// Reject path separators, control chars, null bytes.
-	// This prevents path traversal in file-based backends.
-	for _, r := range name {
-		if r < 32 || r == '/' || r == '\\' || r == 0 {
-			return fmt.Errorf("%w: name contains invalid characters", ErrInvalidKeyName)
-		}
-	}
-	return nil
+	return ValidateKeyName(name)
 }
 
 // Keyring manages multiple signing keys.

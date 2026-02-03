@@ -230,8 +230,9 @@ func (app *Application) CheckTx(ctx context.Context, txBytes []byte) error {
 		return fmt.Errorf("failed to get account: %w", err)
 	}
 
-	// Verify authorization
-	if err := tx.VerifyAuthorization(account, app.accountGetter); err != nil {
+	// Verify authorization using SignDoc-based verification
+	// SECURITY: chainID binding prevents cross-chain replay attacks
+	if err := tx.VerifyAuthorization(app.chainID, account, app.accountGetter); err != nil {
 		return fmt.Errorf("authorization verification failed: %w", err)
 	}
 
@@ -511,8 +512,9 @@ func (app *Application) executeTx(ctx context.Context, tx *types.Transaction) (*
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
-	// Verify authorization
-	if err := tx.VerifyAuthorization(account, app.accountGetter); err != nil {
+	// Verify authorization using SignDoc-based verification
+	// SECURITY: chainID binding prevents cross-chain replay attacks
+	if err := tx.VerifyAuthorization(app.chainID, account, app.accountGetter); err != nil {
 		return &types.TxResult{
 			Code: 1,
 			Log:  fmt.Sprintf("authorization verification failed: %v", err),
