@@ -2,238 +2,223 @@ package types
 
 import (
 	"bytes"
+	"encoding/json"
+	"log"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"time"
 )
 
-// =============================================================================
-// DEPRECATION LOGGING TESTS
-// =============================================================================
-
-// captureLogger captures log output for testing.
-// Implements DeprecationLogger interface.
-type captureLogger struct {
-	mu       sync.Mutex
-	warnings []string
+// mockMessage is a test message that does NOT implement SignDocSerializable
+type mockMessage struct {
+	sender    AccountName
+	recipient AccountName
+	amount    uint64
 }
 
-func newCaptureLogger() *captureLogger {
-	return &captureLogger{
-		warnings: make([]string, 0),
+func (m *mockMessage) Type() string {
+	return "/test.mock.v1.MsgMock"
+}
+
+func (m *mockMessage) ValidateBasic() error {
+	return nil
+}
+
+func (m *mockMessage) GetSigners() []AccountName {
+	return []AccountName{m.sender}
+}
+
+// mockSerializableMessage implements SignDocSerializable
+type mockSerializableMessage struct {
+	sender    AccountName
+	recipient AccountName
+	amount    uint64
+}
+
+func (m *mockSerializableMessage) Type() string {
+	return "/test.mock.v1.MsgSerializable"
+}
+
+func (m *mockSerializableMessage) ValidateBasic() error {
+	return nil
+}
+
+func (m *mockSerializableMessage) GetSigners() []AccountName {
+	return []AccountName{m.sender}
+}
+
+func (m *mockSerializableMessage) SignDocData() (json.RawMessage, error) {
+	return json.Marshal(map[string]interface{}{
+		"sender":    m.sender,
+		"recipient": m.recipient,
+		"amount":    m.amount,
+	})
+}
+
+func TestSignersOnlyFallbackDeprecation_LogsWarning(t *testing.T) {
+	// Capture log output
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(0) // Disable rate limiting for test
+	defer resetDeprecationLogger()
+
+	msg := &mockMessage{
+		sender:    "alice",
+		recipient: "bob",
+		amount:    100,
+	}
+
+	SignersOnlyFallbackDeprecation(msg)
+
+	output := buf.String()
+	if !strings.Contains(output, "DEPRECATION WARNING") {
+		t.Errorf("expected deprecation warning in output, got: %s", output)
+	}
+	if !strings.Contains(output, "/test.mock.v1.MsgMock") {
+		t.Errorf("expected message type in output, got: %s", output)
+	}
+	if !strings.Contains(output, "SignDocSerializable") {
+		t.Errorf("expected SignDocSerializable mention in output, got: %s", output)
+	}
+	if !strings.Contains(output, "signatures do not bind to full message content") {
+		t.Errorf("expected security note in output, got: %s", output)
 	}
 }
 
-func (c *captureLogger) Warn(msg string, keyvals ...interface{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func TestSignersOnlyFallbackDeprecation_RateLimiting(t *testing.T) {
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(100 * time.Millisecond)
+	defer resetDeprecationLogger()
 
-	var b bytes.Buffer
-	b.WriteString(msg)
-	for i := 0; i < len(keyvals); i += 2 {
-		if i+1 < len(keyvals) {
-			b.WriteString(" ")
-			b.WriteString(keyvals[i].(string))
-			b.WriteString("=")
-			switch v := keyvals[i+1].(type) {
-			case string:
-				b.WriteString(v)
-			default:
-				b.WriteString("(value)")
-			}
-		}
-	}
-	c.warnings = append(c.warnings, b.String())
-}
-
-func (c *captureLogger) getWarnings() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	result := make([]string, len(c.warnings))
-	copy(result, c.warnings)
-	return result
-}
-
-// =============================================================================
-// TESTS
-// =============================================================================
-
-func TestDeprecationLogger_RateLimiting(t *testing.T) {
-	// INVARIANT: Each unique message type is logged at most once
-	defer ResetDeprecationLogger()
-
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
-
-	// Log same type multiple times
-	warnSignersOnlyFallback("/punnet.bank.v1.MsgSend")
-	warnSignersOnlyFallback("/punnet.bank.v1.MsgSend")
-	warnSignersOnlyFallback("/punnet.bank.v1.MsgSend")
-
-	warnings := logger.getWarnings()
-	assert.Len(t, warnings, 1, "same message type should only be logged once")
-	assert.Contains(t, warnings[0], "DEPRECATION")
-	assert.Contains(t, warnings[0], "msg_type=/punnet.bank.v1.MsgSend")
-}
-
-func TestDeprecationLogger_DifferentMessageTypes(t *testing.T) {
-	// INVARIANT: Different message types each get their own warning
-	defer ResetDeprecationLogger()
-
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
-
-	warnSignersOnlyFallback("/punnet.bank.v1.MsgSend")
-	warnSignersOnlyFallback("/punnet.staking.v1.MsgDelegate")
-	warnSignersOnlyFallback("/punnet.gov.v1.MsgVote")
-
-	warnings := logger.getWarnings()
-	assert.Len(t, warnings, 3, "different message types should each be logged")
-
-	// Verify each type is present
-	combined := strings.Join(warnings, "\n")
-	assert.Contains(t, combined, "MsgSend")
-	assert.Contains(t, combined, "MsgDelegate")
-	assert.Contains(t, combined, "MsgVote")
-}
-
-func TestDeprecationLogger_WarningContent(t *testing.T) {
-	// INVARIANT: Warning contains required information
-	defer ResetDeprecationLogger()
-
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
-
-	warnSignersOnlyFallback("/punnet.test.v1.TestMsg")
-
-	warnings := logger.getWarnings()
-	require.Len(t, warnings, 1)
-
-	warning := warnings[0]
-	assert.Contains(t, warning, "DEPRECATION")
-	assert.Contains(t, warning, "SignDocSerializable")
-	assert.Contains(t, warning, "signers-only")
-	assert.Contains(t, warning, "msg_type=/punnet.test.v1.TestMsg")
-	assert.Contains(t, warning, "security_note=")
-}
-
-func TestDeprecationLogger_DefaultIsNop(t *testing.T) {
-	// INVARIANT: Default logger is no-op (does not panic or produce output)
-	defer ResetDeprecationLogger()
-
-	// Reset to default state
-	ResetDeprecationLogger()
-
-	// This should not panic and should not produce any output
-	warnSignersOnlyFallback("/punnet.test.v1.TestMsg")
-}
-
-func TestDeprecationLogger_NilLoggerUseNop(t *testing.T) {
-	// INVARIANT: Setting nil logger uses no-op logger (no panic)
-	defer ResetDeprecationLogger()
-
-	SetDeprecationLogger(nil)
-
-	// This should not panic
-	warnSignersOnlyFallback("/punnet.test.v1.TestMsg")
-}
-
-func TestDeprecationLogger_ConcurrentAccess(t *testing.T) {
-	// INVARIANT: Concurrent calls are safe and each type is logged at most once
-	defer ResetDeprecationLogger()
-
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
-
-	var wg sync.WaitGroup
-	msgTypes := []string{
-		"/punnet.bank.v1.MsgSend",
-		"/punnet.staking.v1.MsgDelegate",
-		"/punnet.gov.v1.MsgVote",
+	msg := &mockMessage{
+		sender:    "alice",
+		recipient: "bob",
+		amount:    100,
 	}
 
-	// Launch multiple goroutines that each call the warning multiple times
-	for i := 0; i < 10; i++ {
-		for _, msgType := range msgTypes {
-			wg.Add(1)
-			go func(mt string) {
-				defer wg.Done()
-				warnSignersOnlyFallback(mt)
-			}(msgType)
-		}
+	// First call should log
+	SignersOnlyFallbackDeprecation(msg)
+	firstOutput := buf.String()
+	if !strings.Contains(firstOutput, "DEPRECATION WARNING") {
+		t.Errorf("first call should log warning")
 	}
 
-	wg.Wait()
-
-	warnings := logger.getWarnings()
-	// Each message type should be logged exactly once despite concurrent calls
-	assert.Len(t, warnings, 3, "each message type should be logged exactly once")
-}
-
-func TestConvertMessages_TriggersDeprecationWarning(t *testing.T) {
-	// INVARIANT: Using a message without SignDocSerializable triggers warning
-	defer ResetDeprecationLogger()
-
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
-
-	// testMessage does not implement SignDocSerializable
-	msg := &testMessage{
-		MsgType: "/punnet.test.v1.DeprecatedMsg",
-		Signers: []AccountName{"alice"},
+	// Second call within rate limit should not log
+	buf.Reset()
+	SignersOnlyFallbackDeprecation(msg)
+	secondOutput := buf.String()
+	if secondOutput != "" {
+		t.Errorf("second call within rate limit should not log, got: %s", secondOutput)
 	}
 
-	_, err := convertMessages([]Message{msg})
-	require.NoError(t, err)
+	// Wait for rate limit to expire
+	time.Sleep(150 * time.Millisecond)
 
-	warnings := logger.getWarnings()
-	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], "/punnet.test.v1.DeprecatedMsg")
+	// Third call after rate limit should log
+	buf.Reset()
+	SignersOnlyFallbackDeprecation(msg)
+	thirdOutput := buf.String()
+	if !strings.Contains(thirdOutput, "DEPRECATION WARNING") {
+		t.Errorf("call after rate limit expiry should log warning")
+	}
 }
 
-func TestConvertMessages_NoWarningForSignDocSerializable(t *testing.T) {
-	// INVARIANT: Messages implementing SignDocSerializable do not trigger warning
-	defer ResetDeprecationLogger()
+func TestSignersOnlyFallbackDeprecation_DifferentMessageTypesNotRateLimited(t *testing.T) {
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(time.Hour) // Long rate limit
+	defer resetDeprecationLogger()
 
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
+	msg1 := &mockMessage{sender: "alice"}
+	msg2 := &mockMessageTypeB{sender: "bob"}
 
-	msg := &serializableMessage{
-		MsgType: "/punnet.bank.v1.MsgSend",
-		Signers: []AccountName{"alice"},
-		From:    "alice",
-		To:      "bob",
-		Amount:  1000,
-		Denom:   "uatom",
+	// First message type
+	SignersOnlyFallbackDeprecation(msg1)
+	if !strings.Contains(buf.String(), "/test.mock.v1.MsgMock") {
+		t.Errorf("first message type should log")
 	}
 
-	_, err := convertMessages([]Message{msg})
-	require.NoError(t, err)
-
-	warnings := logger.getWarnings()
-	assert.Len(t, warnings, 0, "SignDocSerializable messages should not trigger warning")
+	// Second message type (different) should also log
+	buf.Reset()
+	SignersOnlyFallbackDeprecation(msg2)
+	if !strings.Contains(buf.String(), "/test.mock.v1.MsgTypeB") {
+		t.Errorf("different message type should log independently")
+	}
 }
 
-func TestResetDeprecationLogger(t *testing.T) {
-	// INVARIANT: Reset clears rate-limiting state
-	defer ResetDeprecationLogger()
+// mockMessageTypeB is another test message type
+type mockMessageTypeB struct {
+	sender AccountName
+}
 
-	logger := newCaptureLogger()
-	SetDeprecationLogger(logger)
+func (m *mockMessageTypeB) Type() string {
+	return "/test.mock.v1.MsgTypeB"
+}
 
-	warnSignersOnlyFallback("/punnet.test.v1.TestMsg")
-	assert.Len(t, logger.getWarnings(), 1)
+func (m *mockMessageTypeB) ValidateBasic() error {
+	return nil
+}
 
-	// Reset and set new logger
-	ResetDeprecationLogger()
+func (m *mockMessageTypeB) GetSigners() []AccountName {
+	return []AccountName{m.sender}
+}
 
-	logger2 := newCaptureLogger()
-	SetDeprecationLogger(logger2)
+func TestSignersOnlyFallbackDeprecation_DisableLogging(t *testing.T) {
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(0)
+	SetDeprecationLoggingEnabled(false)
+	defer resetDeprecationLogger()
 
-	// Same message type should be logged again after reset
-	warnSignersOnlyFallback("/punnet.test.v1.TestMsg")
-	assert.Len(t, logger2.getWarnings(), 1, "reset should clear rate-limiting state")
+	msg := &mockMessage{sender: "alice"}
+	SignersOnlyFallbackDeprecation(msg)
+
+	if buf.String() != "" {
+		t.Errorf("disabled logging should produce no output, got: %s", buf.String())
+	}
+}
+
+func TestConvertMessages_LogsDeprecationForNonSerializable(t *testing.T) {
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(0)
+	defer resetDeprecationLogger()
+
+	// Non-serializable message should trigger deprecation warning
+	msgs := []Message{
+		&mockMessage{sender: "alice", recipient: "bob", amount: 100},
+	}
+
+	_, err := convertMessages(msgs)
+	if err != nil {
+		t.Fatalf("convertMessages failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "DEPRECATION WARNING") {
+		t.Errorf("convertMessages should log deprecation for non-SignDocSerializable message")
+	}
+}
+
+func TestConvertMessages_NoDeprecationForSerializable(t *testing.T) {
+	var buf bytes.Buffer
+	SetDeprecationLogger(log.New(&buf, "", 0))
+	SetDeprecationWarningInterval(0)
+	defer resetDeprecationLogger()
+
+	// Serializable message should NOT trigger deprecation warning
+	msgs := []Message{
+		&mockSerializableMessage{sender: "alice", recipient: "bob", amount: 100},
+	}
+
+	_, err := convertMessages(msgs)
+	if err != nil {
+		t.Fatalf("convertMessages failed: %v", err)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "DEPRECATION WARNING") {
+		t.Errorf("convertMessages should not log deprecation for SignDocSerializable message, got: %s", output)
+	}
 }
