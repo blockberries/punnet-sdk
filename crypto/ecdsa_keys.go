@@ -176,13 +176,16 @@ func (k *secp256r1PrivateKey) PublicKey() PublicKey {
 	return &secp256r1PublicKey{key: &k.key.PublicKey}
 }
 
-// Sign signs the given data using RFC 6979 deterministic signatures.
+// Sign signs the given data using Go's standard ECDSA signing.
 // Returns 64-byte signature: r||s in big-endian.
+//
+// Note: This uses rand.Reader for entropy, producing non-deterministic signatures.
+// Unlike secp256k1 (which uses RFC 6979), signing the same message twice may produce
+// different valid signatures. This is acceptable for most use cases but means
+// signatures cannot be used for deduplication or replay detection.
 func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 	hash := sha256.Sum256(data)
 
-	// Use SignASN1 and parse, or implement RFC 6979 directly
-	// Go 1.20+ uses RFC 6979 by default for ecdsa.Sign
 	r, s, err := ecdsa.Sign(rand.Reader, k.key, hash[:])
 	if err != nil {
 		return nil, fmt.Errorf("secp256r1 signing failed: %w", err)
@@ -198,7 +201,12 @@ func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 	return signature, nil
 }
 
-// Zeroize overwrites the private key with zeros.
+// Zeroize clears the private key scalar.
+//
+// Note: Go's big.Int.SetInt64(0) sets the value to zero but does not securely
+// overwrite the underlying byte buffer. This is a known limitation of big.Int.
+// For secp256k1, the dcrd library's Zero() method handles this properly.
+// In practice, Go's garbage collector may retain the original bytes in memory.
 func (k *secp256r1PrivateKey) Zeroize() {
 	if k.key.D != nil {
 		k.key.D.SetInt64(0)
