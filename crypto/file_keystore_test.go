@@ -726,3 +726,147 @@ func TestEncryptionAEAD_AdditionalData(t *testing.T) {
 	_, err = ks.Load("renamed")
 	assert.ErrorIs(t, err, ErrInvalidPassword, "renamed key should fail AAD check")
 }
+
+// TestFileKeyStore_Close tests the Close method and ErrKeyStoreClosed behavior.
+// Verifies consistent error handling with MemoryStore pattern.
+func TestFileKeyStore_Close(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	// Store a key before closing
+	testKey := EncryptedKey{
+		Name:        "test-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("public-key-bytes-32-bytes-long!!"),
+		PrivKeyData: []byte("private-key-bytes-64-bytes-long-secret-material!!!!!!!!!!!!!!!!"),
+	}
+	err = ks.Store("test-key", testKey)
+	require.NoError(t, err)
+
+	// Close should succeed
+	fks := ks.(*FileKeyStore)
+	err = fks.Close()
+	require.NoError(t, err)
+
+	// All operations should return ErrKeyStoreClosed
+	t.Run("Store after close", func(t *testing.T) {
+		err := fks.Store("new-key", testKey)
+		assert.ErrorIs(t, err, ErrKeyStoreClosed)
+	})
+
+	t.Run("Load after close", func(t *testing.T) {
+		_, err := fks.Load("test-key")
+		assert.ErrorIs(t, err, ErrKeyStoreClosed)
+	})
+
+	t.Run("Delete after close", func(t *testing.T) {
+		err := fks.Delete("test-key")
+		assert.ErrorIs(t, err, ErrKeyStoreClosed)
+	})
+
+	t.Run("List after close", func(t *testing.T) {
+		_, err := fks.List()
+		assert.ErrorIs(t, err, ErrKeyStoreClosed)
+	})
+}
+
+// TestFileKeyStore_CloseIdempotent verifies Close can be called multiple times.
+func TestFileKeyStore_CloseIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	fks := ks.(*FileKeyStore)
+
+	// First close
+	err = fks.Close()
+	require.NoError(t, err)
+
+	// Second close should be no-op
+	err = fks.Close()
+	require.NoError(t, err)
+
+	// Third close should also be no-op
+	err = fks.Close()
+	require.NoError(t, err)
+}
+
+// TestFileKeyStore_CloseConsistentWithMemoryStore documents consistent behavior
+// between FileKeyStore and the expected MemoryStore pattern.
+func TestFileKeyStore_CloseConsistentWithMemoryStore(t *testing.T) {
+	// This test verifies FileKeyStore returns ErrKeyStoreClosed after Close(),
+	// making its behavior consistent with the expected pattern for all stores.
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	fks := ks.(*FileKeyStore)
+	err = fks.Close()
+	require.NoError(t, err)
+
+	// Verify the error message is clear and consistent
+	_, err = fks.Load("any-key")
+	assert.ErrorIs(t, err, ErrKeyStoreClosed)
+	assert.Contains(t, err.Error(), "closed")
+}
+
+// TestFileKeyStore_ConcurrentClose tests thread-safety of Close with concurrent operations.
+func TestFileKeyStore_ConcurrentClose(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	fks := ks.(*FileKeyStore)
+
+	// Pre-store some keys
+	for i := 0; i < 10; i++ {
+		key := EncryptedKey{
+			Name:        fmt.Sprintf("key-%d", i),
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte(fmt.Sprintf("pub-%d", i)),
+			PrivKeyData: []byte(fmt.Sprintf("priv-%d", i)),
+		}
+		err := fks.Store(key.Name, key)
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 100)
+
+	// Start concurrent operations
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_, err := fks.Load(fmt.Sprintf("key-%d", id%10))
+				// Either success or ErrKeyStoreClosed is acceptable
+				if err != nil && err != ErrKeyStoreClosed && err != ErrKeyStoreNotFound {
+					errors <- fmt.Errorf("unexpected error: %w", err)
+				}
+			}
+		}(i)
+	}
+
+	// Close concurrently with operations
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fks.Close()
+	}()
+
+	wg.Wait()
+	close(errors)
+
+	// Check for unexpected errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	require.Empty(t, errList, "unexpected errors during concurrent close: %v", errList)
+
+	// Verify store is definitely closed now
+	_, err = fks.Load("key-0")
+	assert.ErrorIs(t, err, ErrKeyStoreClosed)
+}
