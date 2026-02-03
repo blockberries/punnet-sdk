@@ -62,4 +62,19 @@ var (
 	// SECURITY: This error prevents attackers from submitting multiple copies of the
 	// same signature to inflate their authorization weight.
 	ErrDuplicateSignature = errors.New("duplicate signature from same public key")
+
+	// ErrChainIDMismatch indicates a transaction was signed for a different chain.
+	// SECURITY: This prevents cross-chain replay attacks where a valid transaction
+	// on one chain is replayed on another chain with the same account addresses.
+	ErrChainIDMismatch = errors.New("chain ID mismatch")
+
+	// ErrSequenceMismatch indicates a transaction nonce does not match the expected account sequence.
+	// SECURITY: This prevents replay attacks where a previously valid transaction
+	// is submitted again after it has already been processed.
+	ErrSequenceMismatch = errors.New("account sequence mismatch")
+
+	// ErrUnsupportedVersion indicates a SignDoc version that is not supported.
+	// SECURITY: Rejecting unknown versions prevents forward-compatibility attacks
+	// where nodes with different version support might interpret transactions differently.
+	ErrUnsupportedVersion = errors.New("unsupported SignDoc version")
 )

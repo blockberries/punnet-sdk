@@ -16,6 +16,32 @@ import (
 // Changing this version invalidates all existing signatures.
 const SignDocVersion = "1"
 
+// SupportedSignDocVersions is the list of SignDoc versions that this implementation
+// can validate and process. This is the authoritative source for version support.
+//
+// SECURITY: Nodes MUST reject transactions with unsupported versions to prevent
+// forward-compatibility attacks where different nodes interpret unknown versions
+// differently.
+var SupportedSignDocVersions = []string{"1"}
+
+// ValidateSignDocVersion checks if the given SignDoc version is supported.
+//
+// PRECONDITION: version is a string representing the SignDoc version
+// POSTCONDITION: Returns nil if version is in SupportedSignDocVersions
+// POSTCONDITION: Returns ErrUnsupportedVersion if version is not supported
+//
+// SECURITY: Rejecting unknown versions is critical for consensus safety.
+// If nodes disagree on version support, they may validate the same transaction
+// differently, leading to chain forks.
+func ValidateSignDocVersion(version string) error {
+	for _, v := range SupportedSignDocVersions {
+		if version == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %q (supported: %v)", ErrUnsupportedVersion, version, SupportedSignDocVersions)
+}
+
 // MaxMessagesPerSignDoc limits the number of messages in a SignDoc.
 // SECURITY: Prevents DoS attacks via memory/CPU exhaustion during serialization
 // and iteration over large message arrays.
