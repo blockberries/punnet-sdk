@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"math/big"
+
+	"github.com/blockberries/punnet-sdk/crypto"
 )
 
 const (
@@ -14,24 +16,19 @@ const (
 	MaxRecursionDepth = 10
 )
 
-// Algorithm represents a supported signature algorithm.
+// Algorithm is an alias to crypto.Algorithm.
+// This provides a single canonical type definition while maintaining API compatibility.
 //
-// SECURITY: All algorithms must provide at least 128-bit security level.
-type Algorithm string
+// INVARIANT: types.Algorithm and crypto.Algorithm are the same underlying type.
+// No type conversion is needed between packages.
+type Algorithm = crypto.Algorithm
 
+// Re-export algorithm constants from crypto package for API compatibility.
+// These are the canonical definitions - see crypto/algorithm.go for documentation.
 const (
-	// AlgorithmEd25519 is the Edwards-curve Digital Signature Algorithm.
-	// Key sizes: PubKey=32, PrivKey=64, Signature=64
-	// RECOMMENDED: Default choice for most applications.
-	AlgorithmEd25519 Algorithm = "ed25519"
-
-	// AlgorithmSecp256k1 is the ECDSA algorithm with secp256k1 curve (Bitcoin/Ethereum).
-	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
-	AlgorithmSecp256k1 Algorithm = "secp256k1"
-
-	// AlgorithmSecp256r1 is the ECDSA algorithm with P-256/secp256r1 curve (NIST).
-	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
-	AlgorithmSecp256r1 Algorithm = "secp256r1"
+	AlgorithmEd25519   = crypto.AlgorithmEd25519
+	AlgorithmSecp256k1 = crypto.AlgorithmSecp256k1
+	AlgorithmSecp256r1 = crypto.AlgorithmSecp256r1
 )
 
 // ValidAlgorithms returns the list of production-ready algorithms.
@@ -407,7 +404,11 @@ func (a *Authorization) VerifyAuthorization(account *Account, message []byte, ge
 }
 
 // calculateWeight recursively calculates the total authorization weight
-// It implements cycle detection using DFS with a visited set
+// It implements cycle detection using DFS with a visited set.
+//
+// SECURITY: This function deduplicates signatures by public key to prevent
+// attackers from submitting multiple copies of the same signature to inflate
+// their authorization weight. See Issue #30.
 func (a *Authorization) calculateWeight(
 	accountName AccountName,
 	authority Authority,
@@ -435,10 +436,30 @@ func (a *Authorization) calculateWeight(
 
 	var totalWeight uint64
 
+	// SECURITY FIX (Issue #30): Track which public keys have already contributed weight.
+	// Without this, an attacker could submit multiple copies of the same signature
+	// to inflate their authorization weight and bypass multi-sig thresholds.
+	//
+	// Example attack: Account threshold=3, attacker has one key with weight=1
+	// Without fix: 3 copies of same signature → weight=3 → threshold met (ATTACK SUCCESS)
+	// With fix: 3 copies of same signature → only first counted → weight=1 < 3 (BLOCKED)
+	seenPubKeys := make(map[string]bool)
+
 	// Calculate weight from direct key signatures
 	for _, sig := range a.Signatures {
+		pubKeyStr := string(sig.PubKey)
+
+		// SECURITY: Check for duplicate signatures from same public key
+		if seenPubKeys[pubKeyStr] {
+			// Return error to make duplicate detection explicit
+			return 0, fmt.Errorf("%w: public key already provided a signature", ErrDuplicateSignature)
+		}
+
 		if authority.HasKey(sig.PubKey) {
 			if sig.Verify(message) {
+				// Mark this public key as having contributed
+				seenPubKeys[pubKeyStr] = true
+
 				keyWeight := authority.GetKeyWeight(sig.PubKey)
 				// Check for overflow
 				if totalWeight > ^uint64(0)-keyWeight {

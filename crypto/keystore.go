@@ -17,22 +17,27 @@ const (
 
 	// MaxKeyNameLength prevents DoS via extremely long names.
 	// 256 bytes is sufficient for any reasonable key identifier.
-	MaxKeyNameLength = 256
+	// Note: This is also defined in keyring.go for that subsystem.
+	// MaxKeyNameLength = 256 // (defined in keyring.go)
 )
 
 // forbiddenKeyNameChars contains characters not allowed in key names.
 // Prevents path traversal and filesystem issues.
 const forbiddenKeyNameChars = "/\\:*?\"<>|"
 
-// KeyStore provides persistent storage for keys using KeyEntry.
+// ============================================================================
+// SimpleKeyStore - used by Keyring subsystem (KeyEntry-based)
+// ============================================================================
+
+// SimpleKeyStore provides persistent storage for keys using KeyEntry.
+// This is a simpler interface used by the Keyring subsystem.
 // Implementations must be thread-safe.
-// Used by Keyring implementation for simple key management.
 //
-// CORRECTNESS NOTE: The Keyring relies on KeyStore.Put with overwrite=false
+// CORRECTNESS NOTE: The Keyring relies on SimpleKeyStore.Put with overwrite=false
 // being atomic with respect to existence checks. This is the linearization
 // point for key creation - concurrent Put calls for the same name must
-// result in exactly one success and all others returning ErrKeyStoreExists.
-type KeyStore interface {
+// result in exactly one success and all others returning ErrKeyExists.
+type SimpleKeyStore interface {
 	// Get retrieves a key entry by name.
 	// Returns ErrKeyNotFound if key doesn't exist.
 	// Complexity: Implementation dependent (O(1) for map, O(log n) for B-tree).
@@ -60,6 +65,54 @@ type KeyStore interface {
 	// Complexity: Implementation dependent (typically O(1) or O(log n)).
 	Has(name string) (bool, error)
 }
+
+// KeyEntry represents a stored key with metadata.
+// Used by SimpleKeyStore and Keyring subsystem.
+type KeyEntry struct {
+	// Name is the unique identifier for this key.
+	Name string `json:"name"`
+
+	// Algorithm is the key's signing algorithm.
+	Algorithm Algorithm `json:"algorithm"`
+
+	// PrivateKey is the encrypted or raw private key bytes.
+	// For encrypted storage, this contains the ciphertext.
+	PrivateKey []byte `json:"private_key"`
+
+	// PublicKey is the public key bytes.
+	PublicKey []byte `json:"public_key"`
+
+	// Encrypted indicates whether PrivateKey is encrypted.
+	Encrypted bool `json:"encrypted"`
+}
+
+// Clone creates a deep copy of the KeyEntry.
+// Prevents external mutation of stored keys.
+// Complexity: O(n) where n is total byte size.
+// Memory: Allocates new slices for all byte fields.
+func (e *KeyEntry) Clone() *KeyEntry {
+	if e == nil {
+		return nil
+	}
+	clone := &KeyEntry{
+		Name:      e.Name,
+		Algorithm: e.Algorithm,
+		Encrypted: e.Encrypted,
+	}
+	if e.PrivateKey != nil {
+		clone.PrivateKey = make([]byte, len(e.PrivateKey))
+		copy(clone.PrivateKey, e.PrivateKey)
+	}
+	if e.PublicKey != nil {
+		clone.PublicKey = make([]byte, len(e.PublicKey))
+		copy(clone.PublicKey, e.PublicKey)
+	}
+	return clone
+}
+
+// ============================================================================
+// EncryptedKeyStore - for encrypted key storage backends (EncryptedKey-based)
+// ============================================================================
 
 // EncryptedKeyStore is the interface for encrypted key storage backends.
 // Uses EncryptedKey with full encryption parameter support.
@@ -120,49 +173,6 @@ type EncryptedKeyStore interface {
 	// The returned slice is not guaranteed to be in any particular order.
 	// Callers should not modify the returned slice.
 	List() ([]string, error)
-}
-
-// KeyEntry represents a stored key with metadata.
-type KeyEntry struct {
-	// Name is the unique identifier for this key.
-	Name string `json:"name"`
-
-	// Algorithm is the key's signing algorithm.
-	Algorithm Algorithm `json:"algorithm"`
-
-	// PrivateKey is the encrypted or raw private key bytes.
-	// For encrypted storage, this contains the ciphertext.
-	PrivateKey []byte `json:"private_key"`
-
-	// PublicKey is the public key bytes.
-	PublicKey []byte `json:"public_key"`
-
-	// Encrypted indicates whether PrivateKey is encrypted.
-	Encrypted bool `json:"encrypted"`
-}
-
-// Clone creates a deep copy of the KeyEntry.
-// Prevents external mutation of stored keys.
-// Complexity: O(n) where n is total byte size.
-// Memory: Allocates new slices for all byte fields.
-func (e *KeyEntry) Clone() *KeyEntry {
-	if e == nil {
-		return nil
-	}
-	clone := &KeyEntry{
-		Name:      e.Name,
-		Algorithm: e.Algorithm,
-		Encrypted: e.Encrypted,
-	}
-	if e.PrivateKey != nil {
-		clone.PrivateKey = make([]byte, len(e.PrivateKey))
-		copy(clone.PrivateKey, e.PrivateKey)
-	}
-	if e.PublicKey != nil {
-		clone.PublicKey = make([]byte, len(e.PublicKey))
-		copy(clone.PublicKey, e.PublicKey)
-	}
-	return clone
 }
 
 // EncryptedKey represents a stored key that may be encrypted or plaintext.
@@ -287,6 +297,10 @@ func (k *EncryptedKey) SafeString() string {
 	}
 	return "EncryptedKey{Name:" + k.Name + ", Algorithm:" + k.Algorithm.String() + ", Storage:" + encrypted + "}"
 }
+
+// ============================================================================
+// Key name validation
+// ============================================================================
 
 // ValidateKeyName checks that a key name is valid for storage.
 // Returns nil if valid, ErrInvalidKeyName if invalid.

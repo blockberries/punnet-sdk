@@ -4,7 +4,7 @@ import (
 	"sync"
 )
 
-// MemoryStore implements KeyStore with in-memory storage.
+// MemoryStore implements SimpleKeyStore with in-memory storage.
 // Thread-safe via RWMutex. Optimized for read-heavy workloads.
 //
 // Performance characteristics:

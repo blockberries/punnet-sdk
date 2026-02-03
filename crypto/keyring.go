@@ -6,8 +6,12 @@ import (
 	"sync"
 )
 
-// Key signing constraints.
+// Key name constraints.
 const (
+	// MaxKeyNameLength is the maximum allowed length for a key name.
+	// Prevents resource exhaustion attacks.
+	MaxKeyNameLength = 256
+
 	// MaxSignDataLength is the maximum allowed input length for Sign.
 	// Ed25519 handles any length, but we cap for consistency with future backends.
 	// 64MB should handle any reasonable signing use case.
@@ -22,6 +26,28 @@ var (
 	ErrInvalidKey   = errors.New("invalid key data")
 	ErrDataTooLarge = errors.New("data exceeds maximum sign length")
 )
+
+// validateKeyNameSimple validates a key name for security.
+// Rejects empty names, overly long names, and names with dangerous characters.
+// Complexity: O(n) where n is name length.
+// Note: This is a simpler version used by Keyring; see file_keystore.go for
+// the full validation used by FileKeyStore.
+func validateKeyNameSimple(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name cannot be empty", ErrInvalidKeyName)
+	}
+	if len(name) > MaxKeyNameLength {
+		return fmt.Errorf("%w: name too long (max %d characters)", ErrInvalidKeyName, MaxKeyNameLength)
+	}
+	// Reject path separators, control chars, null bytes.
+	// This prevents path traversal in file-based backends.
+	for _, r := range name {
+		if r < 32 || r == '/' || r == '\\' || r == 0 {
+			return fmt.Errorf("%w: name contains invalid characters", ErrInvalidKeyName)
+		}
+	}
+	return nil
+}
 
 // Keyring manages multiple signing keys.
 // All methods are thread-safe.
@@ -63,7 +89,7 @@ type Keyring interface {
 	Sign(name string, data []byte) ([]byte, error)
 }
 
-// defaultKeyring implements Keyring with a pluggable KeyStore backend.
+// defaultKeyring implements Keyring with a pluggable SimpleKeyStore backend.
 //
 // CACHE SEMANTICS: Uses an approximate LRU cache for hot keys. Recency is
 // updated only on cache misses (when keys are loaded from store), not on
@@ -73,7 +99,7 @@ type Keyring interface {
 // For typical workloads with a small working set of keys, this provides
 // excellent performance while maintaining correctness.
 type defaultKeyring struct {
-	store KeyStore
+	store SimpleKeyStore
 
 	// mu protects the cache
 	mu sync.RWMutex
@@ -99,7 +125,7 @@ func WithCacheSize(size int) KeyringOption {
 
 // NewKeyring creates a new keyring with the given storage backend.
 // Complexity: O(1).
-func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
+func NewKeyring(store SimpleKeyStore, opts ...KeyringOption) Keyring {
 	kr := &defaultKeyring{
 		store:        store,
 		cache:        make(map[string]Signer),
@@ -115,7 +141,7 @@ func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
 // NewKey generates a new key.
 func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := ValidateKeyName(name); err != nil {
+	if err := validateKeyNameSimple(name); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +184,7 @@ func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 // ImportKey imports an existing private key.
 func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := ValidateKeyName(name); err != nil {
+	if err := validateKeyNameSimple(name); err != nil {
 		return nil, err
 	}
 

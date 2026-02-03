@@ -42,6 +42,12 @@ func (a Algorithm) IsValid() bool {
 	}
 }
 
+// KeySize returns the public key size in bytes for this algorithm.
+// Alias for PublicKeySize() for API compatibility.
+func (a Algorithm) KeySize() int {
+	return a.PublicKeySize()
+}
+
 // PublicKeySize returns the expected public key size in bytes.
 // Complexity: O(1)
 func (a Algorithm) PublicKeySize() int {
@@ -77,12 +83,6 @@ func (a Algorithm) SignatureSize() int {
 	default:
 		return 0
 	}
-}
-
-// KeySize returns the public key size in bytes for this algorithm.
-// Alias for PublicKeySize for compatibility.
-func (a Algorithm) KeySize() int {
-	return a.PublicKeySize()
 }
 
 // MarshalJSON implements json.Marshaler.

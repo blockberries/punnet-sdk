@@ -154,7 +154,7 @@ func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
 		return &ed25519PrivateKey{key: priv}, nil
 
 	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		// TODO: Implement secp256k1 and secp256r1 in issue #45
+		// TODO: Implement secp256k1 and secp256r1 in issue #8
 		return nil, fmt.Errorf("algorithm %s not yet implemented", algo)
 
 	default:
@@ -205,25 +205,4 @@ func PublicKeyFromBytes(algo Algorithm, data []byte) (PublicKey, error) {
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
 	}
-}
-
-// SimplePublicKey is a struct-based public key for simpler use cases.
-// This exists for compatibility with other parts of the codebase.
-type SimplePublicKey struct {
-	Algo  Algorithm
-	Bytes []byte
-}
-
-// SimplePrivateKey is a struct-based private key for simpler use cases.
-// This exists for compatibility with other parts of the codebase.
-// Private keys should be handled with care and cleared from memory when no longer needed.
-type SimplePrivateKey struct {
-	Algo  Algorithm
-	Bytes []byte
-}
-
-// Clear zeroes the private key bytes to reduce exposure in memory.
-// This should be called when the key is no longer needed.
-func (pk *SimplePrivateKey) Clear() {
-	Zeroize(pk.Bytes)
 }

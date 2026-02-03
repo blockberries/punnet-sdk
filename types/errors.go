@@ -57,4 +57,9 @@ var (
 
 	// ErrUnsupportedAlgorithm indicates an unknown or unsupported signature algorithm
 	ErrUnsupportedAlgorithm = errors.New("unsupported signature algorithm")
+
+	// ErrDuplicateSignature indicates duplicate signatures from the same public key.
+	// SECURITY: This error prevents attackers from submitting multiple copies of the
+	// same signature to inflate their authorization weight.
+	ErrDuplicateSignature = errors.New("duplicate signature from same public key")
 )
