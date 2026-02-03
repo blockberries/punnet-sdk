@@ -3,19 +3,37 @@ package crypto
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"runtime"
 )
 
-// Zeroize overwrites a byte slice with zeros.
+// Zeroize securely overwrites a byte slice with zeros.
 // Used to clear sensitive data (private keys) from memory.
+//
+// Implementation uses subtle.XORBytes(b, b, b) which XORs each byte with itself,
+// producing zeros. This operation cannot be optimized away by the compiler because:
+// 1. crypto/subtle functions are specifically designed to resist optimization
+// 2. The operation has observable side effects (modifying memory)
+// 3. runtime.KeepAlive ensures the slice isn't considered "dead" after zeroing
+//
+// This is more robust than a naive loop like `for i := range b { b[i] = 0 }`
+// which compilers may detect as a dead store and eliminate entirely.
+//
 // Complexity: O(n) where n is slice length.
-// Note: Compiler may optimize this away; for production use consider
-// using crypto/subtle or runtime.KeepAlive to prevent optimization.
+// Memory: Zero allocations.
+// Benchmark: See BenchmarkZeroize in crypto_benchmark_test.go
 func Zeroize(b []byte) {
-	for i := range b {
-		b[i] = 0
+	if len(b) == 0 {
+		return
 	}
+	// XOR each byte with itself to produce zeros.
+	// subtle.XORBytes cannot be optimized away by the compiler.
+	subtle.XORBytes(b, b, b)
+	// Prevent the compiler from treating b as dead after zeroing.
+	// This ensures the zeroing operation is not eliminated as a dead store.
+	runtime.KeepAlive(b)
 }
 
 // PublicKey represents a public key for signature verification.

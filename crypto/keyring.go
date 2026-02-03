@@ -18,8 +18,8 @@ const (
 	MaxSignDataLength = 64 * 1024 * 1024
 )
 
-// Keyring error types - these are aliases to the errors in errors.go
-// for backwards compatibility. Prefer using errors from errors.go.
+// Keyring error types.
+// Note: ErrInvalidPassword is defined in errors.go for shared use.
 var (
 	ErrKeyNotFound  = errors.New("key not found")
 	ErrKeyExists    = errors.New("key already exists")
@@ -90,7 +90,14 @@ type Keyring interface {
 }
 
 // defaultKeyring implements Keyring with a pluggable SimpleKeyStore backend.
-// Uses an LRU-style cache for hot keys to minimize store lookups.
+//
+// CACHE SEMANTICS: Uses an approximate LRU cache for hot keys. Recency is
+// updated only on cache misses (when keys are loaded from store), not on
+// hits. This trades true LRU semantics for reduced lock contention on the
+// read path - cache hits require only a read lock, not a write lock.
+//
+// For typical workloads with a small working set of keys, this provides
+// excellent performance while maintaining correctness.
 type defaultKeyring struct {
 	store SimpleKeyStore
 
@@ -284,8 +291,16 @@ func (kr *defaultKeyring) ListKeys() ([]string, error) {
 }
 
 // DeleteKey removes a key.
+//
+// CONSISTENCY: Cache is invalidated before store deletion. If store.Delete
+// fails (e.g., network error on remote store), the key remains in the store.
+// GetKey will reload it on next access, restoring consistency (eventual
+// consistency). This is a deliberate choice: cache-first invalidation prevents
+// serving stale data, and store self-healing handles transient failures.
+// ASSUMPTION: Store failures are transient; permanent store corruption
+// requires out-of-band recovery.
 func (kr *defaultKeyring) DeleteKey(name string) error {
-	// Remove from cache
+	// Remove from cache first (prevents serving stale data on store failure)
 	kr.mu.Lock()
 	delete(kr.cache, name)
 	// Remove from order slice
@@ -344,7 +359,12 @@ func (kr *defaultKeyring) addToCache(name string, signer Signer) {
 	kr.cacheOrder = append(kr.cacheOrder, name)
 }
 
-// moveToFront moves a key to the front of the LRU order.
+// moveToFront marks a key as recently used by moving it to the end of cacheOrder.
+// cacheOrder is maintained oldest-first: eviction pops from index 0, newest
+// items are appended to the end. The name "moveToFront" refers to moving to
+// the front of the recency queue (most recently used), not the slice position.
+// Complexity: O(n) where n is cache size. With default maxCacheSize=100, this
+// is acceptable; for larger caches, consider container/list for O(1) operations.
 func (kr *defaultKeyring) moveToFront(name string) {
 	for i, n := range kr.cacheOrder {
 		if n == name {

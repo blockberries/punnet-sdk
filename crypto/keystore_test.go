@@ -90,8 +90,8 @@ func (m *mockKeyStore) List() ([]string, error) {
 	return names, nil
 }
 
-// Verify mockKeyStore implements KeyStore interface.
-var _ KeyStore = (*mockKeyStore)(nil)
+// Verify mockKeyStore implements EncryptedKeyStore interface.
+var _ EncryptedKeyStore = (*mockKeyStore)(nil)
 
 func TestKeyStore_Store(t *testing.T) {
 	store := newMockKeyStore()
@@ -125,7 +125,7 @@ func TestKeyStore_Load(t *testing.T) {
 		Algorithm:   AlgorithmSecp256k1,
 		PubKey:      []byte("pub"),
 		PrivKeyData: []byte("priv"),
-		Salt:        make([]byte, MinSaltLength),   // 16 bytes
+		Salt:        make([]byte, MinSaltLength),     // 16 bytes
 		Nonce:       make([]byte, AESGCMNonceLength), // 12 bytes
 	}
 	require.NoError(t, store.Store("test-key", original))

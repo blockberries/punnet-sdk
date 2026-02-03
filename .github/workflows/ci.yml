@@ -3,7 +3,7 @@
 # Main CI pipeline for punnet-sdk. Runs on every PR and push to main.
 #
 # Maintainer: The Glue
-# Last major update: 2026-02 (cross-platform builds #81, golangci-lint env var #59)
+# Last major update: 2026-02 (golangci-lint binary mode #77, cross-platform builds #81)
 #
 # If this breaks at 2 AM, check:
 # 1. GitHub Actions status page
@@ -25,12 +25,8 @@ permissions:
   pull-requests: write
 
 env:
-  # Go version must match go.mod. golangci-lint version must be built with this Go version or higher.
+  # Go version must match go.mod
   GO_VERSION: '1.25'
-  # golangci-lint version. We use goinstall mode which builds from source with our Go version,
-  # avoiding "Go version used to build golangci-lint is lower than targeted" errors.
-  # v1.63.4 is known to work; update cautiously as v2.x has breaking config changes.
-  GOLANGCI_LINT_VERSION: 'v1.63.4'
 
 jobs:
   test:
@@ -74,12 +70,11 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          # Use goinstall mode to build golangci-lint with Go 1.25
-          # This avoids "Go version used to build golangci-lint is lower than targeted" errors
-          install-mode: goinstall
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          # v2.8.0 has official binaries built with Go 1.25, so binary mode works now
+          # (Previously used goinstall mode as workaround for v1.x Go 1.25 incompatibility)
+          version: v2.8.0
 
   build:
     name: Build (${{ matrix.os }}, Go ${{ matrix.go }})
