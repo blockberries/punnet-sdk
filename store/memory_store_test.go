@@ -120,7 +120,11 @@ func TestMemoryStore_Iterator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Iterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	count := 0
 	for iter.Valid() {
@@ -150,7 +154,11 @@ func TestMemoryStore_IteratorRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Iterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	expected := []string{"d", "e", "f", "g"}
 	got := make([]string, 0)
@@ -189,7 +197,11 @@ func TestMemoryStore_ReverseIterator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReverseIterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	expected := []string{"c", "b", "a"}
 	got := make([]string, 0)
@@ -222,7 +234,11 @@ func TestMemoryStore_IteratorValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Iterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	if !iter.Valid() {
 		t.Fatal("expected iterator to be valid")
@@ -245,7 +261,11 @@ func TestMemoryStore_IteratorDefensiveCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Iterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("iter Close failed: %v", err)
+		}
+	})
 
 	gotKey := iter.Key()
 	gotValue := iter.Value()
@@ -256,7 +276,11 @@ func TestMemoryStore_IteratorDefensiveCopy(t *testing.T) {
 
 	// Get again - should be unchanged
 	iter2, _ := ms.Iterator(nil, nil)
-	defer iter2.Close()
+	t.Cleanup(func() {
+		if err := iter2.Close(); err != nil {
+			t.Errorf("iter2 Close failed: %v", err)
+		}
+	})
 
 	key2 := iter2.Key()
 	value2 := iter2.Value()

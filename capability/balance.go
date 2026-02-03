@@ -225,7 +225,7 @@ func (bc *balanceCapability) HasBalance(ctx context.Context, account types.Accou
 }
 
 // IterateBalances iterates over all balances
-func (bc *balanceCapability) IterateBalances(ctx context.Context, callback func(store.Balance) error) error {
+func (bc *balanceCapability) IterateBalances(ctx context.Context, callback func(store.Balance) error) (err error) {
 	if bc == nil || bc.store == nil {
 		return ErrCapabilityNil
 	}
@@ -234,16 +234,20 @@ func (bc *balanceCapability) IterateBalances(ctx context.Context, callback func(
 		return fmt.Errorf("callback cannot be nil")
 	}
 
-	iter, err := bc.store.Iterator(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create iterator: %w", err)
+	iter, iterErr := bc.store.Iterator(ctx)
+	if iterErr != nil {
+		return fmt.Errorf("failed to create iterator: %w", iterErr)
 	}
-	defer iter.Close()
+	defer func() {
+		if closeErr := iter.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close iterator: %w", closeErr)
+		}
+	}()
 
 	for iter.Valid() {
-		balance, err := iter.Value()
-		if err != nil {
-			return fmt.Errorf("failed to get value: %w", err)
+		balance, valErr := iter.Value()
+		if valErr != nil {
+			return fmt.Errorf("failed to get value: %w", valErr)
 		}
 
 		if err := callback(balance); err != nil {
@@ -259,7 +263,7 @@ func (bc *balanceCapability) IterateBalances(ctx context.Context, callback func(
 }
 
 // IterateAccountBalances iterates over all balances for a specific account
-func (bc *balanceCapability) IterateAccountBalances(ctx context.Context, account types.AccountName, callback func(store.Balance) error) error {
+func (bc *balanceCapability) IterateAccountBalances(ctx context.Context, account types.AccountName, callback func(store.Balance) error) (err error) {
 	if bc == nil || bc.store == nil {
 		return ErrCapabilityNil
 	}
@@ -272,16 +276,20 @@ func (bc *balanceCapability) IterateAccountBalances(ctx context.Context, account
 		return fmt.Errorf("callback cannot be nil")
 	}
 
-	iter, err := bc.store.AccountIterator(ctx, account)
-	if err != nil {
-		return fmt.Errorf("failed to create iterator: %w", err)
+	iter, iterErr := bc.store.AccountIterator(ctx, account)
+	if iterErr != nil {
+		return fmt.Errorf("failed to create iterator: %w", iterErr)
 	}
-	defer iter.Close()
+	defer func() {
+		if closeErr := iter.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close iterator: %w", closeErr)
+		}
+	}()
 
 	for iter.Valid() {
-		balance, err := iter.Value()
-		if err != nil {
-			return fmt.Errorf("failed to get value: %w", err)
+		balance, valErr := iter.Value()
+		if valErr != nil {
+			return fmt.Errorf("failed to get value: %w", valErr)
 		}
 
 		if err := callback(balance); err != nil {
