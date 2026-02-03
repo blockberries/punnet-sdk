@@ -332,6 +332,11 @@ func convertMessages(msgs []Message) ([]SignDocMessage, error) {
 			// Fallback: only include signers (backwards-compatible)
 			// SECURITY NOTE: This fallback loses message content. Implementations
 			// should migrate to SignDocSerializable for stronger signature binding.
+			//
+			// DEPRECATION: This fallback is deprecated and will be removed in a future version.
+			// Log a rate-limited warning to help identify messages needing migration.
+			warnSignersOnlyFallback(msg.Type())
+
 			msgData, err = json.Marshal(map[string]interface{}{
 				"signers": msg.GetSigners(),
 			})
