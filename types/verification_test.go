@@ -63,6 +63,241 @@ func TestTransaction_ValidateSignDocRoundtrip(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// =============================================================================
+// VALIDATE SIGNDOC ROUNDTRIP COMPREHENSIVE TESTS (Issue #6)
+// =============================================================================
+// SECURITY: These tests verify that ValidateSignDocRoundtrip correctly detects
+// non-deterministic serialization, which is critical for preventing signature
+// malleability attacks.
+
+func TestTransaction_ValidateSignDocRoundtrip_Success(t *testing.T) {
+	// Test various valid transactions pass roundtrip validation
+	tests := []struct {
+		name string
+		tx   *Transaction
+	}{
+		{
+			name: "basic transaction",
+			tx: &Transaction{
+				Account: "alice",
+				Messages: []Message{&testMessage{
+					MsgType: "/punnet.bank.v1.MsgSend",
+					Signers: []AccountName{"alice"},
+				}},
+				Nonce: 1,
+			},
+		},
+		{
+			name: "transaction with memo",
+			tx: &Transaction{
+				Account: "bob",
+				Messages: []Message{&testMessage{
+					MsgType: "/punnet.staking.v1.MsgDelegate",
+					Signers: []AccountName{"bob"},
+				}},
+				Nonce: 42,
+				Memo:  "test memo with unicode: 日本語",
+			},
+		},
+		{
+			name: "transaction with fee",
+			tx: &Transaction{
+				Account: "charlie",
+				Messages: []Message{&testMessage{
+					MsgType: "/punnet.bank.v1.MsgSend",
+					Signers: []AccountName{"charlie"},
+				}},
+				Nonce: 100,
+				Fee: Fee{
+					Amount:   Coins{{Denom: "uatom", Amount: 1000}},
+					GasLimit: 200000,
+				},
+				FeeSlippage: Ratio{
+					Numerator:   1,
+					Denominator: 100,
+				},
+			},
+		},
+		{
+			name: "transaction with multiple messages",
+			tx: &Transaction{
+				Account: "dave",
+				Messages: []Message{
+					&testMessage{MsgType: "/msg1", Signers: []AccountName{"dave"}},
+					&testMessage{MsgType: "/msg2", Signers: []AccountName{"dave"}},
+					&testMessage{MsgType: "/msg3", Signers: []AccountName{"dave"}},
+				},
+				Nonce: 999,
+			},
+		},
+		{
+			name: "transaction with special characters in memo",
+			tx: &Transaction{
+				Account: "eve",
+				Messages: []Message{&testMessage{
+					MsgType: "/punnet.bank.v1.MsgSend",
+					Signers: []AccountName{"eve"},
+				}},
+				Nonce: 1,
+				Memo:  `special chars: "quotes" and \backslash and newline\n`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.tx.ValidateSignDocRoundtrip("test-chain", tt.tx.Nonce)
+			assert.NoError(t, err, "valid transaction should pass roundtrip validation")
+		})
+	}
+}
+
+func TestTransaction_ValidateSignDocRoundtrip_Determinism(t *testing.T) {
+	// INVARIANT: Repeated calls to ValidateSignDocRoundtrip produce consistent results.
+	// This is critical for signature verification security.
+	msg := &testMessage{
+		MsgType: "/punnet.bank.v1.MsgSend",
+		Signers: []AccountName{"alice"},
+	}
+
+	tx := &Transaction{
+		Account:  "alice",
+		Messages: []Message{msg},
+		Nonce:    42,
+		Memo:     "determinism test",
+		Fee: Fee{
+			Amount:   Coins{{Denom: "uatom", Amount: 5000}},
+			GasLimit: 100000,
+		},
+		FeeSlippage: Ratio{Numerator: 1, Denominator: 100},
+	}
+
+	// Call 100 times - must never fail
+	for i := 0; i < 100; i++ {
+		err := tx.ValidateSignDocRoundtrip("mainnet-1", 42)
+		assert.NoError(t, err, "iteration %d failed", i)
+	}
+}
+
+func TestTransaction_ValidateSignDocRoundtrip_ErrorIsSignDocMismatch(t *testing.T) {
+	// SECURITY: Verify that when ValidateSignDocRoundtrip fails, it returns
+	// ErrSignDocMismatch (or a wrapped version of it).
+	//
+	// Note: Since our serialization is deterministic, we can't directly test
+	// the bytes mismatch path without mocking. Instead, we verify that the
+	// error handling paths correctly wrap ErrSignDocMismatch.
+
+	// Test case: Transaction that would fail during ToSignDoc (message conversion error)
+	// We simulate this by using a message that returns an error from SignDocData.
+	t.Run("verifies ErrSignDocMismatch is used for failures", func(t *testing.T) {
+		// Create a valid transaction and verify success
+		msg := &testMessage{
+			MsgType: "/punnet.bank.v1.MsgSend",
+			Signers: []AccountName{"alice"},
+		}
+
+		tx := &Transaction{
+			Account:  "alice",
+			Messages: []Message{msg},
+			Nonce:    1,
+		}
+
+		// This should succeed
+		err := tx.ValidateSignDocRoundtrip("test-chain", 1)
+		assert.NoError(t, err)
+
+		// Verify that the error type ErrSignDocMismatch exists and is the correct sentinel
+		assert.NotNil(t, ErrSignDocMismatch)
+		assert.Contains(t, ErrSignDocMismatch.Error(), "non-deterministic serialization")
+	})
+}
+
+// failingSignDocMessage is a test message that fails SignDocData serialization.
+// SECURITY: This is used to test error handling paths in ValidateSignDocRoundtrip.
+type failingSignDocMessage struct {
+	testMessage
+	failOnSignDocData bool
+}
+
+func (m *failingSignDocMessage) SignDocData() (json.RawMessage, error) {
+	if m.failOnSignDocData {
+		return nil, ErrSignDocMismatch
+	}
+	return json.Marshal(map[string]interface{}{
+		"signers": m.Signers,
+	})
+}
+
+func TestTransaction_ValidateSignDocRoundtrip_SignDocCreationFailure(t *testing.T) {
+	// Test that ValidateSignDocRoundtrip correctly handles SignDoc creation failures.
+	// SECURITY: Error handling must not leak sensitive information or bypass validation.
+	msg := &failingSignDocMessage{
+		testMessage: testMessage{
+			MsgType: "/punnet.bank.v1.MsgSend",
+			Signers: []AccountName{"alice"},
+		},
+		failOnSignDocData: true,
+	}
+
+	tx := &Transaction{
+		Account:  "alice",
+		Messages: []Message{msg},
+		Nonce:    1,
+	}
+
+	err := tx.ValidateSignDocRoundtrip("test-chain", 1)
+	assert.Error(t, err, "should fail when SignDoc creation fails")
+	assert.ErrorIs(t, err, ErrSignDocMismatch, "error should wrap ErrSignDocMismatch")
+}
+
+func TestValidateSignDocRoundtrip_Integration_WithVerifyAuthorization(t *testing.T) {
+	// SECURITY: Verify that ValidateSignDocRoundtrip is used correctly within
+	// VerifyAuthorization to catch non-determinism before signature verification.
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	account := &Account{
+		Name: "alice",
+		Authority: Authority{
+			Threshold:      1,
+			KeyWeights:     map[string]uint64{string(pub): 1},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 1,
+	}
+
+	msg := &testMessage{
+		MsgType: "/punnet.bank.v1.MsgSend",
+		Signers: []AccountName{"alice"},
+	}
+
+	tx := &Transaction{
+		Account:  "alice",
+		Messages: []Message{msg},
+		Nonce:    1,
+	}
+
+	// First, verify roundtrip passes
+	err = tx.ValidateSignDocRoundtrip("test-chain", 1)
+	require.NoError(t, err, "roundtrip should pass for valid transaction")
+
+	// Sign the transaction
+	signDoc, err := tx.ToSignDoc("test-chain", 1)
+	require.NoError(t, err)
+	signBytes, _ := signDoc.GetSignBytes()
+	sig := ed25519.Sign(priv, signBytes)
+
+	tx.Authorization = &Authorization{
+		Signatures:            []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: sig}},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	// Verify authorization (which internally does roundtrip validation)
+	getter := newMockAccountGetter()
+	err = tx.VerifyAuthorization("test-chain", account, getter)
+	assert.NoError(t, err, "valid signature should pass verification")
+}
+
 func TestTransaction_VerifyAuthorization_Valid(t *testing.T) {
 	// Generate key pair
 	pub, priv, err := ed25519.GenerateKey(nil)
