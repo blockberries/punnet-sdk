@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated": "2026-02-03T13:10:51.983274Z",
+  "generated": "2026-02-03T13:17:52.139938Z",
   "description": "Cross-implementation test vectors for Punnet SDK signing system",
   "vectors": [
     {
@@ -334,6 +334,176 @@
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "signature_hex": "6c56939459a551a79b2c5788a209a76f83de883a56fed9999c6ffe7978ace140101b4c6324cd3b7cf55a912bbef50f6ad44fae379ea7ef9d4341f68592c7fe05"
+          }
+        }
+      }
+    },
+    {
+      "name": "secp256k1_key_derivation",
+      "description": "secp256k1 key derivation from deterministic seed: SHA-256(\"punnet-sdk-test-vector-seed-secp256k1\")",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "key-derivation-test",
+        "account": "test",
+        "account_sequence": "0",
+        "nonce": "0",
+        "messages": [
+          {
+            "type": "/test.KeyDerivation",
+            "data": {}
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"key-derivation-test\",\"account\":\"test\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.KeyDerivation\",\"data\":{}}],\"nonce\":\"0\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "1031d531b0ddf9d0b43276fc92043ffb42de34a62e9a9818a3bb21174a295358",
+        "signatures": {
+          "secp256k1": {
+            "private_key_hex": "90c5d69de9715561f52e1a08bd83bded63a76575c1d548611d1dfccd1eb6e76a",
+            "public_key_hex": "03b325ae4316dd016cc428612633eed21cbcdfdd7e53de2a42b52d8e64964424dd",
+            "signature_hex": "70128fb5f9df384b28e35054d3a32939047cf7500caa3c130d29a8e964b4804e3aaf4f0afb21d96f4ce77e5a04e2894e6cc4dc9e7ea0b98afac56157f5ba87ce"
+          },
+          "secp256k1_seed": {
+            "private_key_hex": "90c5d69de9715561f52e1a08bd83bded63a76575c1d548611d1dfccd1eb6e76a",
+            "public_key_hex": "03b325ae4316dd016cc428612633eed21cbcdfdd7e53de2a42b52d8e64964424dd",
+            "signature_hex": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "secp256k1_signing",
+      "description": "secp256k1 signature generation for a known message (RFC 6979 deterministic)",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "signing-test",
+        "account": "signer",
+        "account_sequence": "1",
+        "nonce": "1",
+        "memo": "Sign this message",
+        "messages": [
+          {
+            "type": "/test.SignMe",
+            "data": {
+              "content": "test data for signing"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"signing-test\",\"account\":\"signer\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.SignMe\",\"data\":{\"content\":\"test data for signing\"}}],\"nonce\":\"1\",\"memo\":\"Sign this message\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "0b0e4ed0b34db09ccda4cf49e1299b6750d49adb94fb1636e5265ff88b81e285",
+        "signatures": {
+          "secp256k1": {
+            "private_key_hex": "90c5d69de9715561f52e1a08bd83bded63a76575c1d548611d1dfccd1eb6e76a",
+            "public_key_hex": "03b325ae4316dd016cc428612633eed21cbcdfdd7e53de2a42b52d8e64964424dd",
+            "signature_hex": "6abc640cd97655c4a237c4fe8c84ef8e9f1da081d82d38b14e51ea71c1efe1cb34011ea1f788833a50b881d3413fcc5d3b38ab4f87e22e635c34d8fbe151db52"
+          }
+        }
+      }
+    },
+    {
+      "name": "secp256r1_key_derivation",
+      "description": "secp256r1 (P-256) key derivation from deterministic seed: SHA-256(\"punnet-sdk-test-vector-seed-secp256r1\")",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "key-derivation-test",
+        "account": "test",
+        "account_sequence": "0",
+        "nonce": "0",
+        "messages": [
+          {
+            "type": "/test.KeyDerivation",
+            "data": {}
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"key-derivation-test\",\"account\":\"test\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.KeyDerivation\",\"data\":{}}],\"nonce\":\"0\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "1031d531b0ddf9d0b43276fc92043ffb42de34a62e9a9818a3bb21174a295358",
+        "signatures": {
+          "secp256r1": {
+            "private_key_hex": "a9feb2832c9aebac6a1f0c0caf2b4d05a910fcdf99e519876ed6971489b00513",
+            "public_key_hex": "02620fc79d841e0e7594553f098dfae74f4cea0e2902a01771aadb5d92853c9e27",
+            "signature_hex": "58bae6f68ebe419818e4eca268c58969c2b14d25a1987dd7c5cbe9a16c86e821b606af0da0131f14b444c5fd5d155a1fcde4c2d9b67eaf0a337bb21f9c283934"
+          },
+          "secp256r1_seed": {
+            "private_key_hex": "a9feb2832c9aebac6a1f0c0caf2b4d05a910fcdf99e519876ed6971489b00513",
+            "public_key_hex": "02620fc79d841e0e7594553f098dfae74f4cea0e2902a01771aadb5d92853c9e27",
+            "signature_hex": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "secp256r1_signing",
+      "description": "secp256r1 (P-256) signature generation for a known message (RFC 6979 deterministic)",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "signing-test",
+        "account": "signer",
+        "account_sequence": "1",
+        "nonce": "1",
+        "memo": "Sign this message",
+        "messages": [
+          {
+            "type": "/test.SignMe",
+            "data": {
+              "content": "test data for signing"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"signing-test\",\"account\":\"signer\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.SignMe\",\"data\":{\"content\":\"test data for signing\"}}],\"nonce\":\"1\",\"memo\":\"Sign this message\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "0b0e4ed0b34db09ccda4cf49e1299b6750d49adb94fb1636e5265ff88b81e285",
+        "signatures": {
+          "secp256r1": {
+            "private_key_hex": "a9feb2832c9aebac6a1f0c0caf2b4d05a910fcdf99e519876ed6971489b00513",
+            "public_key_hex": "02620fc79d841e0e7594553f098dfae74f4cea0e2902a01771aadb5d92853c9e27",
+            "signature_hex": "2668bc6da4b362db2ff24b4c7f6c93b87f773379ebfeb804cdfd9469ac0804fa7d9dda03046812f9a1325076473a76b9381e70b4583d1636e06c0ab768be0418"
           }
         }
       }
