@@ -149,6 +149,9 @@ func (tx *Transaction) GetSignBytes() []byte {
 // validates deterministic roundtrip, then verifies all signatures against the hash.
 //
 // INVARIANT: Verification is deterministic - same inputs always produce same result.
+//
+// Performance: Optimized to perform single SignDoc construction and reuse serialized JSON
+// for both roundtrip validation and hash computation. See issue #36.
 func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, getter AccountGetter) error {
 	if account == nil {
 		return fmt.Errorf("%w: account is nil", ErrInvalidTransaction)
@@ -164,22 +167,38 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 		return fmt.Errorf("%w: expected nonce %d, got %d", ErrInvalidTransaction, account.Nonce, tx.Nonce)
 	}
 
-	// 1. Reconstruct SignDoc from transaction fields
+	// 1. Reconstruct SignDoc from transaction fields (single construction)
 	signDoc := tx.ToSignDoc(chainID, account.Nonce)
 
-	// 2. Validate roundtrip to ensure determinism
-	// SECURITY: This catches non-deterministic serialization bugs and tampering
-	if err := tx.ValidateSignDocRoundtrip(chainID, account.Nonce); err != nil {
-		return err
-	}
-
-	// 3. Get canonical JSON bytes and hash
-	signBytes, err := signDoc.GetSignBytes()
+	// 2. Serialize to JSON (json1)
+	json1, err := signDoc.ToJSON()
 	if err != nil {
-		return fmt.Errorf("%w: failed to get sign bytes: %v", ErrInvalidTransaction, err)
+		return fmt.Errorf("%w: initial serialization failed: %v", ErrSignDocMismatch, err)
 	}
 
-	// 4. Verify all signatures against the hash
+	// 3. Validate roundtrip: parse and re-serialize to verify determinism
+	// SECURITY: This catches non-deterministic serialization bugs and tampering
+	parsed, err := ParseSignDoc(json1)
+	if err != nil {
+		return fmt.Errorf("%w: parsing failed: %v", ErrSignDocMismatch, err)
+	}
+
+	json2, err := parsed.ToJSON()
+	if err != nil {
+		return fmt.Errorf("%w: re-serialization failed: %v", ErrSignDocMismatch, err)
+	}
+
+	if !bytes.Equal(json1, json2) {
+		return fmt.Errorf("%w: roundtrip produced different bytes (len %d vs %d)",
+			ErrSignDocMismatch, len(json1), len(json2))
+	}
+
+	// 4. Compute hash from json1 (reuse, no additional ToJSON call)
+	// Complexity: O(n) where n = len(json1)
+	hash := sha256.Sum256(json1)
+	signBytes := hash[:]
+
+	// 5. Verify all signatures against the hash
 	// First verify the signatures are valid, then check authorization weight
 	return tx.Authorization.VerifyAuthorization(account, signBytes, getter)
 }
