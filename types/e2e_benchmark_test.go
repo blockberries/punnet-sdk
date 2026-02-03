@@ -467,3 +467,195 @@ func BenchmarkMemoryPressure_BatchVerification(b *testing.B) {
 		}
 	}
 }
+
+// ============================================================================
+// Concurrent Signing Benchmarks
+// ============================================================================
+
+// BenchmarkParallel_Sign_Ed25519 measures signing throughput under concurrent load.
+//
+// SECURITY NOTE: This benchmark exercises concurrent signing with the same key,
+// which is a common pattern in consensus applications where a validator may need
+// to sign multiple proposals/votes in parallel. Thread safety of the underlying
+// ed25519 implementation is critical here.
+//
+// This complements BenchmarkParallel_Verify_Ed25519 for full consensus performance modeling.
+func BenchmarkParallel_Sign_Ed25519(b *testing.B) {
+	key, err := crypto.GeneratePrivateKey(crypto.AlgorithmEd25519)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	sd := createMediumSignDoc()
+	signBytes, err := sd.GetSignBytes()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, signErr := key.Sign(signBytes)
+			if signErr != nil {
+				b.Fatal(signErr)
+			}
+		}
+	})
+}
+
+// BenchmarkMemoryPressure_BatchSigning simulates batch signing throughput
+// where multiple signatures are created in sequence (e.g., proposer signing
+// many transactions in a block).
+//
+// This is the signing counterpart to BenchmarkMemoryPressure_BatchVerification.
+func BenchmarkMemoryPressure_BatchSigning(b *testing.B) {
+	batchSize := 100
+
+	// Pre-generate key and sign docs
+	key, err := crypto.GeneratePrivateKey(crypto.AlgorithmEd25519)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	signBytesArr := make([][]byte, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		sd := NewSignDoc("test-chain", uint64(i), fmt.Sprintf("account%d", i), uint64(i), "")
+		sd.AddMessage("/msg", json.RawMessage(`{}`))
+		signBytes, signBytesErr := sd.GetSignBytes()
+		if signBytesErr != nil {
+			b.Fatal(signBytesErr)
+		}
+		signBytesArr[i] = signBytes
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		// Sign all messages in batch
+		for j := 0; j < batchSize; j++ {
+			_, signErr := key.Sign(signBytesArr[j])
+			if signErr != nil {
+				b.Fatal(signErr)
+			}
+		}
+	}
+}
+
+// ============================================================================
+// Multi-Signature Assembly Benchmarks
+// ============================================================================
+
+// BenchmarkMultiSig_Assembly measures the performance of aggregating multiple
+// signatures into an Authorization structure.
+//
+// This is relevant for threshold/multisig schemes common in consensus where
+// validators collect signatures from multiple parties before submitting.
+// The benchmark measures the overhead of Authorization assembly, not signing itself.
+func BenchmarkMultiSig_Assembly(b *testing.B) {
+	signerCounts := []int{2, 5, 10, 21} // Common multisig configurations (2-of-3, 5-of-7, 10-of-15, 21-of-33)
+
+	for _, signerCount := range signerCounts {
+		b.Run(fmt.Sprintf("Signers_%d", signerCount), func(b *testing.B) {
+			// Pre-generate keys and signatures
+			keys := make([]crypto.PrivateKey, signerCount)
+			signatures := make([]Signature, signerCount)
+
+			sd := createMediumSignDoc()
+			signBytes, err := sd.GetSignBytes()
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			for i := 0; i < signerCount; i++ {
+				key, keyErr := crypto.GeneratePrivateKey(crypto.AlgorithmEd25519)
+				if keyErr != nil {
+					b.Fatal(keyErr)
+				}
+				keys[i] = key
+
+				sig, sigErr := key.Sign(signBytes)
+				if sigErr != nil {
+					b.Fatal(sigErr)
+				}
+
+				signatures[i] = Signature{
+					Algorithm: AlgorithmEd25519,
+					PubKey:    key.PublicKey().Bytes(),
+					Signature: sig,
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				// Assemble Authorization from signatures
+				auth := NewAuthorization(signatures...)
+				// Use the authorization to prevent compiler optimization
+				_ = len(auth.Signatures)
+			}
+		})
+	}
+}
+
+// BenchmarkMultiSig_AssemblyAndVerify measures end-to-end multisig performance
+// including both assembly and verification of all signatures.
+//
+// This represents the full cost a verifier pays when processing a multisig transaction.
+func BenchmarkMultiSig_AssemblyAndVerify(b *testing.B) {
+	signerCounts := []int{2, 5, 10, 21}
+
+	for _, signerCount := range signerCounts {
+		b.Run(fmt.Sprintf("Signers_%d", signerCount), func(b *testing.B) {
+			// Pre-generate keys and signatures
+			keys := make([]crypto.PrivateKey, signerCount)
+			pubKeys := make([]crypto.PublicKey, signerCount)
+			signatures := make([]Signature, signerCount)
+
+			sd := createMediumSignDoc()
+			signBytes, err := sd.GetSignBytes()
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			for i := 0; i < signerCount; i++ {
+				key, keyErr := crypto.GeneratePrivateKey(crypto.AlgorithmEd25519)
+				if keyErr != nil {
+					b.Fatal(keyErr)
+				}
+				keys[i] = key
+				pubKeys[i] = key.PublicKey()
+
+				sig, sigErr := key.Sign(signBytes)
+				if sigErr != nil {
+					b.Fatal(sigErr)
+				}
+
+				signatures[i] = Signature{
+					Algorithm: AlgorithmEd25519,
+					PubKey:    key.PublicKey().Bytes(),
+					Signature: sig,
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				// Assemble Authorization from signatures
+				auth := NewAuthorization(signatures...)
+
+				// Verify all signatures in the authorization
+				for j, sig := range auth.Signatures {
+					if !pubKeys[j].Verify(signBytes, sig.Signature) {
+						b.Fatal("verification failed")
+					}
+				}
+			}
+		})
+	}
+}
