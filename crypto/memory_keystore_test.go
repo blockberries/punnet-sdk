@@ -531,6 +531,247 @@ func TestMemoryKeyStore_StorePreventsMutation(t *testing.T) {
 	assert.Equal(t, byte('p'), loaded.PrivKeyData[0], "stored key should not be mutated by external changes")
 }
 
+func TestMemoryKeyStore_Has(t *testing.T) {
+	store := NewMemoryKeyStore()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
+
+	// Has on non-existent key should return false
+	exists, err := store.Has("missing")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	// Store a key
+	key := EncryptedKey{
+		Name:        "test-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	require.NoError(t, store.Store("test-key", key))
+
+	// Has on existing key should return true
+	exists, err = store.Has("test-key")
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	// Delete the key
+	require.NoError(t, store.Delete("test-key"))
+
+	// Has on deleted key should return false
+	exists, err = store.Has("test-key")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestMemoryKeyStore_HasOnClosedStore(t *testing.T) {
+	store := NewMemoryKeyStore()
+
+	key := EncryptedKey{
+		Name:        "test-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	require.NoError(t, store.Store("test-key", key))
+
+	// Close the store
+	require.NoError(t, store.Close())
+
+	// Has should return ErrKeyStoreClosed
+	_, err := store.Has("test-key")
+	assert.ErrorIs(t, err, ErrKeyStoreClosed)
+}
+
+func TestMemoryKeyStore_Clear(t *testing.T) {
+	store := NewMemoryKeyStore()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
+
+	// Store some keys
+	for i := 0; i < 5; i++ {
+		name := "key-" + string(rune('0'+i))
+		key := EncryptedKey{
+			Name:        name,
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte("pub"),
+			PrivKeyData: []byte("priv"),
+		}
+		require.NoError(t, store.Store(name, key))
+	}
+	assert.Equal(t, 5, store.Len())
+
+	// Clear the store
+	err := store.Clear()
+	require.NoError(t, err)
+	assert.Equal(t, 0, store.Len())
+
+	// Should be able to store new keys after clear
+	key := EncryptedKey{
+		Name:        "new-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	err = store.Store("new-key", key)
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.Len())
+}
+
+func TestMemoryKeyStore_ClearOnClosedStore(t *testing.T) {
+	store := NewMemoryKeyStore()
+
+	// Close the store
+	require.NoError(t, store.Close())
+
+	// Clear should return ErrKeyStoreClosed
+	err := store.Clear()
+	assert.ErrorIs(t, err, ErrKeyStoreClosed)
+}
+
+func TestMemoryKeyStore_NewMemoryKeyStoreWithNegativeCapacity(t *testing.T) {
+	// Negative capacity should not panic
+	store := NewMemoryKeyStoreWithCapacity(-1)
+	require.NotNil(t, store)
+	assert.Equal(t, 0, store.Len())
+
+	// Store should still work
+	key := EncryptedKey{
+		Name:        "test-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	err := store.Store("test-key", key)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
+}
+
+// TestMemoryKeyStore_ConcurrentClear verifies thread safety when Clear()
+// races with other operations.
+func TestMemoryKeyStore_ConcurrentClear(t *testing.T) {
+	store := NewMemoryKeyStore()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
+
+	var wg sync.WaitGroup
+
+	// Run multiple rounds of concurrent Clear and other operations
+	for round := 0; round < 10; round++ {
+		// Pre-populate with some keys
+		for i := 0; i < 10; i++ {
+			name := "key-" + string(rune('0'+i))
+			key := EncryptedKey{
+				Name:        name,
+				Algorithm:   AlgorithmEd25519,
+				PubKey:      []byte("pub"),
+				PrivKeyData: []byte("priv"),
+			}
+			_ = store.Store(name, key)
+		}
+
+		// Concurrent Clear, Store, Load, List, Delete
+		for i := 0; i < 50; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				switch idx % 6 {
+				case 0:
+					_ = store.Clear()
+				case 1:
+					_, _ = store.Load("key-0")
+				case 2:
+					_, _ = store.List()
+				case 3:
+					_ = store.Delete("key-1")
+				case 4:
+					key := EncryptedKey{
+						Name:      "new",
+						Algorithm: AlgorithmEd25519,
+					}
+					_ = store.Store("new", key)
+				case 5:
+					_, _ = store.Has("key-2")
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		// Clear for next round
+		_ = store.Clear()
+	}
+
+	// Store should still be in consistent state (no panics, valid response)
+	_, err := store.List()
+	require.NoError(t, err)
+}
+
+// TestMemoryKeyStore_ConcurrentLoadDelete verifies behavior when Load
+// is called on a key being concurrently deleted.
+func TestMemoryKeyStore_ConcurrentLoadDelete(t *testing.T) {
+	store := NewMemoryKeyStore()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
+
+	var wg sync.WaitGroup
+
+	// Run multiple rounds
+	for round := 0; round < 20; round++ {
+		// Store a key
+		key := EncryptedKey{
+			Name:        "target",
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte("pub"),
+			PrivKeyData: []byte("priv"),
+		}
+		_ = store.Store("target", key)
+
+		// Concurrent Load and Delete on the same key
+		for i := 0; i < 20; i++ {
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				loaded, err := store.Load("target")
+				// Either succeeds with the key, or returns ErrKeyStoreNotFound
+				if err == nil {
+					assert.Equal(t, "target", loaded.Name)
+				} else {
+					assert.ErrorIs(t, err, ErrKeyStoreNotFound)
+				}
+			}()
+			go func() {
+				defer wg.Done()
+				err := store.Delete("target")
+				// Either succeeds or returns ErrKeyStoreNotFound (another deleter won)
+				if err != nil {
+					assert.ErrorIs(t, err, ErrKeyStoreNotFound)
+				}
+			}()
+		}
+		wg.Wait()
+
+		// Clear for next round
+		_ = store.Clear()
+	}
+}
+
 // BenchmarkMemoryKeyStore_Store measures Store performance.
 func BenchmarkMemoryKeyStore_Store(b *testing.B) {
 	store := NewMemoryKeyStoreWithCapacity(b.N)

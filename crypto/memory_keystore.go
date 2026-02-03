@@ -206,6 +206,24 @@ func (m *MemoryKeyStore) Close() error {
 	return nil
 }
 
+// Has returns true if a key exists in the store.
+// More efficient than Load when you don't need the key data.
+//
+// Returns ErrKeyStoreClosed if the store has been closed.
+//
+// Complexity: O(1) average.
+func (m *MemoryKeyStore) Has(name string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.closed {
+		return false, ErrKeyStoreClosed
+	}
+
+	_, exists := m.keys[name]
+	return exists, nil
+}
+
 // Len returns the number of keys in the store.
 // Useful for monitoring and testing.
 //
@@ -220,6 +238,33 @@ func (m *MemoryKeyStore) Len() int {
 		return 0
 	}
 	return len(m.keys)
+}
+
+// Clear removes all keys from the store.
+// Securely wipes all key material before removal.
+// Useful for testing. The store remains open after Clear().
+//
+// Returns ErrKeyStoreClosed if the store has been closed.
+//
+// Complexity: O(n) where n is number of keys.
+func (m *MemoryKeyStore) Clear() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return ErrKeyStoreClosed
+	}
+
+	// Wipe all keys before clearing the map.
+	// Note: key is a copy of the map value (Go range semantics), but Wipe()
+	// zeros the underlying byte slice arrays which are shared with the map entry.
+	for _, key := range m.keys {
+		key.Wipe()
+	}
+	// Reinitialize with default capacity (matches NewMemoryKeyStore)
+	m.keys = make(map[string]EncryptedKey, 16)
+
+	return nil
 }
 
 // copyEncryptedKey creates a deep copy of an EncryptedKey.
