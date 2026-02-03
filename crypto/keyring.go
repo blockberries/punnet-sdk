@@ -380,17 +380,49 @@ func (kr *defaultKeyring) DeleteKey(name string) error {
 // Sign signs data with the named key.
 // Validates data length to ensure compatibility with all backends.
 // Complexity: O(GetKey) + O(n) where n is data length.
+//
+// Thread safety: This method holds a read lock for the entire duration of the
+// signing operation. This prevents Close() from zeroizing the signer's private
+// key while signing is in progress.
 func (kr *defaultKeyring) Sign(name string, data []byte) ([]byte, error) {
 	// Bounds check for data length (future HSM backends may have limits)
 	if len(data) > MaxSignDataLength {
 		return nil, ErrDataTooLarge
 	}
 
-	signer, err := kr.GetKey(name)
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
+
+	if kr.closed {
+		return nil, ErrKeyringClosed
+	}
+
+	// Check cache first (hot path, already holding lock)
+	if signer, ok := kr.cache[name]; ok {
+		return signer.Sign(data)
+	}
+
+	// Not in cache - need to load from store.
+	// Note: We can't call addToCache here because it needs a write lock.
+	// We load, sign, and let GetKey populate the cache on next access.
+	entry, err := kr.store.Get(name)
 	if err != nil {
 		return nil, err
 	}
-	return signer.Sign(data)
+	defer Zeroize(entry.PrivateKey)
+
+	privKey, err := PrivateKeyFromBytes(entry.Algorithm, entry.PrivateKey)
+	if err != nil {
+		return nil, ErrInvalidKey
+	}
+
+	signer := NewSigner(privKey)
+	sig, err := signer.Sign(data)
+
+	// Zeroize the temporary signer's key since we can't cache it
+	zeroizeSigner(signer)
+
+	return sig, err
 }
 
 // addToCache adds a signer to the cache with LRU eviction.
@@ -409,10 +441,13 @@ func (kr *defaultKeyring) addToCache(name string, signer Signer) {
 		return
 	}
 
-	// Evict if at capacity
+	// Evict if at capacity, zeroizing evicted keys
 	for len(kr.cache) >= kr.maxCacheSize && len(kr.cacheOrder) > 0 {
 		oldest := kr.cacheOrder[0]
 		kr.cacheOrder = kr.cacheOrder[1:]
+		if oldSigner, ok := kr.cache[oldest]; ok {
+			zeroizeSigner(oldSigner)
+		}
 		delete(kr.cache, oldest)
 	}
 

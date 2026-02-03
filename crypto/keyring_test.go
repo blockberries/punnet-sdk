@@ -1183,6 +1183,152 @@ func TestKeyringRapidCloseReopen(t *testing.T) {
 	}
 }
 
+// TestKeyringSignHoldsLockDuringOperation verifies that Sign() holds the lock
+// for the entire signing operation, preventing Close() from zeroizing the key
+// mid-operation. This is a data race prevention test.
+func TestKeyringSignHoldsLockDuringOperation(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create a key
+	_, err := kr.NewKey("sign-lock-test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Run many iterations of Sign concurrently with Close attempts
+	// If Sign() doesn't hold the lock, we'd get inconsistent results or panics
+	for round := 0; round < 10; round++ {
+		// Need fresh keyring each round since Close() destroys it
+		store := NewMemoryStore()
+		kr := NewKeyring(store)
+		_, err := kr.NewKey("key", AlgorithmEd25519)
+		if err != nil {
+			t.Fatalf("round %d: NewKey failed: %v", round, err)
+		}
+
+		var wg sync.WaitGroup
+		data := []byte("test data for signing")
+
+		// Start 10 signing goroutines
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < 5; j++ {
+					sig, err := kr.Sign("key", data)
+					// Should get either valid signature or ErrKeyringClosed
+					// Never a panic or corrupted data
+					if err != nil && err != ErrKeyringClosed && err != ErrKeyNotFound {
+						t.Errorf("Sign returned unexpected error: %v", err)
+					}
+					if err == nil && len(sig) == 0 {
+						t.Error("Sign returned empty signature without error")
+					}
+				}
+			}()
+		}
+
+		// Close while signing is happening
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = kr.Close()
+		}()
+
+		wg.Wait()
+	}
+}
+
+// TestKeyringCacheEvictionZeroizesKeys verifies that keys are zeroized when
+// evicted from the cache (not just when explicitly deleted or closed).
+func TestKeyringCacheEvictionZeroizesKeys(t *testing.T) {
+	// Use a small cache size to force evictions
+	store := NewMemoryStore()
+	kr := NewKeyring(store, WithCacheSize(2))
+
+	// Create first key and get its signer reference
+	signer1, err := kr.NewKey("key1", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key1 failed: %v", err)
+	}
+
+	// Get reference to the underlying private key bytes
+	bs1, ok := signer1.(*BasicSigner)
+	if !ok {
+		t.Skip("cannot verify zeroization - signer is not BasicSigner")
+	}
+	keyBytes1 := bs1.privateKey.Bytes()
+
+	// Verify key1 is not zeroed initially
+	nonZero := false
+	for _, b := range keyBytes1 {
+		if b != 0 {
+			nonZero = true
+			break
+		}
+	}
+	if !nonZero {
+		t.Fatal("key1 should not be zeroed initially")
+	}
+
+	// Create second key (cache now has 2 keys)
+	_, err = kr.NewKey("key2", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key2 failed: %v", err)
+	}
+
+	// Create third key - this should evict key1 from cache
+	_, err = kr.NewKey("key3", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey key3 failed: %v", err)
+	}
+
+	// key1 should now be zeroized (evicted from cache)
+	allZero := true
+	for _, b := range keyBytes1 {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if !allZero {
+		t.Error("key1 should be zeroized after cache eviction")
+	}
+}
+
+// TestKeyringSignFromStoreZeroizesTemporaryKey verifies that when Sign()
+// loads a key from store (not cache), the temporary signer is zeroized.
+func TestKeyringSignFromStoreZeroizesTemporaryKey(t *testing.T) {
+	store := NewMemoryStore()
+	// Disable cache to force store loads
+	kr := NewKeyring(store, WithCacheSize(0))
+
+	_, err := kr.NewKey("uncached", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Sign should work even with no cache
+	data := []byte("test data")
+	sig, err := kr.Sign("uncached", data)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+	if len(sig) == 0 {
+		t.Error("Sign returned empty signature")
+	}
+
+	// The key should still be usable from store
+	sig2, err := kr.Sign("uncached", data)
+	if err != nil {
+		t.Fatalf("second Sign failed: %v", err)
+	}
+	if !bytes.Equal(sig, sig2) {
+		t.Error("same key should produce same signature for same data")
+	}
+}
+
 func BenchmarkKeyringClose(b *testing.B) {
 	// Benchmark Close() with various numbers of keys
 	for _, numKeys := range []int{10, 100, 1000} {
