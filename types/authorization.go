@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"math/big"
+
+	"github.com/blockberries/punnet-sdk/crypto"
 )
 
 const (
@@ -14,24 +16,15 @@ const (
 	MaxRecursionDepth = 10
 )
 
-// Algorithm represents a supported signature algorithm.
-//
-// SECURITY: All algorithms must provide at least 128-bit security level.
-type Algorithm string
+// Algorithm is an alias to crypto.Algorithm to avoid duplicate type definitions.
+// See crypto/algorithm.go for the canonical definition and documentation.
+type Algorithm = crypto.Algorithm
 
+// Re-export algorithm constants from crypto package for convenience.
 const (
-	// AlgorithmEd25519 is the Edwards-curve Digital Signature Algorithm.
-	// Key sizes: PubKey=32, PrivKey=64, Signature=64
-	// RECOMMENDED: Default choice for most applications.
-	AlgorithmEd25519 Algorithm = "ed25519"
-
-	// AlgorithmSecp256k1 is the ECDSA algorithm with secp256k1 curve (Bitcoin/Ethereum).
-	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
-	AlgorithmSecp256k1 Algorithm = "secp256k1"
-
-	// AlgorithmSecp256r1 is the ECDSA algorithm with P-256/secp256r1 curve (NIST).
-	// Key sizes: PubKey=33 (compressed), PrivKey=32, Signature=64
-	AlgorithmSecp256r1 Algorithm = "secp256r1"
+	AlgorithmEd25519   = crypto.AlgorithmEd25519
+	AlgorithmSecp256k1 = crypto.AlgorithmSecp256k1
+	AlgorithmSecp256r1 = crypto.AlgorithmSecp256r1
 )
 
 // ValidAlgorithms returns the list of production-ready algorithms.

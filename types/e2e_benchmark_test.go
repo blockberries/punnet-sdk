@@ -1,6 +1,7 @@
 package types
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -330,13 +331,10 @@ func BenchmarkIsolated_Ed25519Verify_32Bytes(b *testing.B) {
 	}
 }
 
-// Helper for isolated SHA256 benchmark
+// sha256Sum computes SHA256 hash for isolated benchmarking.
 func sha256Sum(data []byte) []byte {
-	// Inline to avoid import cycle and measure just the hash
-	// This is the same as crypto/sha256.Sum256
-	var h [32]byte
-	// Use Go's sha256 directly
-	return append(h[:0], data...) // Placeholder - actual benchmark uses real SHA256
+	h := sha256.Sum256(data)
+	return h[:]
 }
 
 // ============================================================================
