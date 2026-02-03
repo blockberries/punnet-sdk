@@ -30,4 +30,10 @@ var (
 
 	// ErrKeyStoreClosed is returned when operations are attempted on a closed store.
 	ErrKeyStoreClosed = errors.New("key store is closed")
+
+	// ErrKeychainUnavailable is returned when the OS keychain cannot be accessed.
+	// Common causes:
+	//   - Linux: D-Bus not running, or no secret service daemon (gnome-keyring, ksecretservice)
+	//   - Headless environments: No GUI session for authentication prompts
+	ErrKeychainUnavailable = errors.New("keychain unavailable")
 )
