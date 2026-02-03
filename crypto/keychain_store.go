@@ -342,6 +342,121 @@ func (ks *KeychainStore) addToKeyList(name string) error {
 	return nil
 }
 
+// RepairReport contains the results of an index repair operation.
+type RepairReport struct {
+	// StaleEntriesRemoved contains key names that were in the index but not in the keychain.
+	// These entries have been removed from the index.
+	StaleEntriesRemoved []string
+
+	// OrphanedKeysFound contains key names that were found in the keychain but not in the index.
+	// These have been added to the index.
+	// Note: Due to go-keyring API limitations, orphan detection requires probing with known
+	// key names. Full keychain enumeration would require platform-specific code.
+	OrphanedKeysFound []string
+
+	// KeysVerified is the count of keys that were successfully verified (in both index and keychain).
+	KeysVerified int
+}
+
+// RepairIndex scans the keychain and repairs any inconsistencies between the
+// stored keys and the index. This is useful after a crash or if the index
+// becomes out of sync with the actual keychain contents.
+//
+// The repair process:
+// 1. Reads all key names from the current index
+// 2. Verifies each indexed key exists in the keychain
+// 3. Removes stale index entries (keys in index but not in keychain)
+// 4. Optionally probes for orphaned keys if probeKeys is provided
+//
+// Note: Due to go-keyring API limitations, this method cannot enumerate all
+// keys in the keychain. To detect orphaned keys (keys in keychain but not in
+// index), provide a list of known key names to probe via the probeKeys parameter.
+// Pass nil to skip orphan detection.
+//
+// Returns ErrKeyStoreClosed if the store has been closed.
+// Returns ErrKeyStoreIO on keychain errors.
+//
+// Complexity: O(n + m) where n = indexed keys, m = probe keys
+// Each key check involves a keychain IPC call (~1-5ms typical).
+func (ks *KeychainStore) RepairIndex(probeKeys []string) (RepairReport, error) {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+
+	if err := ks.checkClosed(); err != nil {
+		return RepairReport{}, err
+	}
+
+	report := RepairReport{
+		StaleEntriesRemoved: []string{},
+		OrphanedKeysFound:   []string{},
+	}
+
+	// Step 1: Get current index
+	currentIndex := make(map[string]bool)
+	listStr, err := keyring.Get(ks.serviceName, keychainListKey)
+	if err != nil && err != keyring.ErrNotFound {
+		return RepairReport{}, fmt.Errorf("%w: failed to read key list: %v", ErrKeyStoreIO, err)
+	}
+
+	if listStr != "" {
+		for _, name := range strings.Split(listStr, ",") {
+			if name != "" {
+				currentIndex[name] = true
+			}
+		}
+	}
+
+	// Step 2: Verify each indexed key exists in keychain
+	verifiedKeys := make([]string, 0, len(currentIndex))
+	for name := range currentIndex {
+		keychainKey := keychainKeyPrefix + name
+		_, err := keyring.Get(ks.serviceName, keychainKey)
+		if err == keyring.ErrNotFound {
+			// Stale entry - key in index but not in keychain
+			report.StaleEntriesRemoved = append(report.StaleEntriesRemoved, name)
+		} else if err != nil {
+			return RepairReport{}, fmt.Errorf("%w: failed to verify key %q: %v", ErrKeyStoreIO, name, err)
+		} else {
+			// Key exists in both
+			verifiedKeys = append(verifiedKeys, name)
+			report.KeysVerified++
+		}
+	}
+
+	// Step 3: Probe for orphaned keys (if probe list provided)
+	if probeKeys != nil {
+		for _, name := range probeKeys {
+			// Skip if already in index
+			if currentIndex[name] {
+				continue
+			}
+			// Skip invalid names
+			if validateKeyName(name) != nil {
+				continue
+			}
+
+			keychainKey := keychainKeyPrefix + name
+			_, err := keyring.Get(ks.serviceName, keychainKey)
+			if err == nil {
+				// Orphaned key - in keychain but not in index
+				report.OrphanedKeysFound = append(report.OrphanedKeysFound, name)
+				verifiedKeys = append(verifiedKeys, name)
+			}
+			// Ignore ErrNotFound (key doesn't exist) and other errors (be lenient during repair)
+		}
+	}
+
+	// Step 4: Rebuild index if there were any changes
+	if len(report.StaleEntriesRemoved) > 0 || len(report.OrphanedKeysFound) > 0 {
+		newListStr := strings.Join(verifiedKeys, ",")
+		if err := keyring.Set(ks.serviceName, keychainListKey, newListStr); err != nil {
+			return RepairReport{}, fmt.Errorf("%w: failed to update key list: %v", ErrKeyStoreIO, err)
+		}
+	}
+
+	return report, nil
+}
+
 // removeFromKeyList removes a key name from the index.
 // Must be called with write lock held.
 func (ks *KeychainStore) removeFromKeyList(name string) error {
