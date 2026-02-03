@@ -252,3 +252,46 @@ func TestTimingAttack_HasSignatureFrom(t *testing.T) {
 
 	t.Log("✓ HasSignatureFrom uses constant-time comparison")
 }
+
+// TestSignDoc_CrossChainReplayProtection explicitly documents and verifies the security property
+// that prevents cross-chain replay attacks.
+//
+// SECURITY INVARIANT: A signature valid on chain A MUST be invalid on chain B.
+//
+// PROOF SKETCH: The ChainID is included in the SignDoc structure and is serialized as part of
+// GetSignBytes(). Since GetSignBytes() returns SHA-256(canonical_json), different ChainIDs
+// produce different hashes. A signature created for one chain will fail verification on
+// another chain because the sign bytes will not match.
+//
+// ATTACK SCENARIO PREVENTED: Without this protection, an attacker could observe a valid
+// transaction on "mainnet" and replay it on "testnet" (or vice versa), potentially stealing
+// funds or causing unintended state changes on the target chain.
+func TestSignDoc_CrossChainReplayProtection(t *testing.T) {
+	// Create two SignDocs with identical content except for ChainID
+	mainnetSignDoc := NewSignDoc("mainnet", 1, "alice", 1, "transfer to bob")
+	mainnetSignDoc.AddMessage("/punnet.bank.v1.MsgSend", []byte(`{"from":"alice","to":"bob","amount":"100"}`))
+
+	testnetSignDoc := NewSignDoc("testnet", 1, "alice", 1, "transfer to bob")
+	testnetSignDoc.AddMessage("/punnet.bank.v1.MsgSend", []byte(`{"from":"alice","to":"bob","amount":"100"}`))
+
+	// Get the sign bytes for each chain
+	mainnetSignBytes, err := mainnetSignDoc.GetSignBytes()
+	require.NoError(t, err, "mainnet GetSignBytes should succeed")
+
+	testnetSignBytes, err := testnetSignDoc.GetSignBytes()
+	require.NoError(t, err, "testnet GetSignBytes should succeed")
+
+	// CRITICAL ASSERTION: Different chains MUST produce different sign bytes
+	// This is the fundamental property that prevents cross-chain replay attacks
+	assert.NotEqual(t, mainnetSignBytes, testnetSignBytes,
+		"SECURITY VIOLATION: identical transaction content on different chains "+
+			"must produce different sign bytes to prevent cross-chain replay attacks")
+
+	// Additional verification: same chain, same content produces same sign bytes (determinism)
+	mainnetSignBytes2, err := mainnetSignDoc.GetSignBytes()
+	require.NoError(t, err)
+	assert.Equal(t, mainnetSignBytes, mainnetSignBytes2,
+		"same SignDoc must produce identical sign bytes (determinism)")
+
+	t.Log("✓ Cross-chain replay protection: different chainIDs produce different sign bytes")
+}
