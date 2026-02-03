@@ -45,6 +45,26 @@ var WellKnownTestKeys = struct {
 	}(),
 }
 
+// mustJSON serializes the SignDoc to JSON, panicking on error.
+// Used in test vector generation where errors indicate bugs.
+func mustJSON(signDoc *types.SignDoc) []byte {
+	json, err := signDoc.ToJSON()
+	if err != nil {
+		panic("failed to serialize SignDoc to JSON: " + err.Error())
+	}
+	return json
+}
+
+// mustSignBytes computes the sign bytes, panicking on error.
+// Used in test vector generation where errors indicate bugs.
+func mustSignBytes(signDoc *types.SignDoc) []byte {
+	bytes, err := signDoc.GetSignBytes()
+	if err != nil {
+		panic("failed to compute sign bytes: " + err.Error())
+	}
+	return bytes
+}
+
 // GenerateTestVectors creates the complete test vector file.
 func GenerateTestVectors() (*TestVectorFile, error) {
 	vectors := []TestVector{}
@@ -155,8 +175,8 @@ func generateSimpleSendVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 
 	// Generate Ed25519 signature
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
@@ -212,8 +232,8 @@ func generateMultiMessageVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -259,8 +279,8 @@ func generateMemoVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -306,8 +326,8 @@ func generateFeesVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -357,8 +377,8 @@ func generateMultipleFeeCoinsVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -405,8 +425,8 @@ func generateEd25519KeyDerivationVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	// Document the seed derivation process
@@ -461,8 +481,8 @@ func generateEd25519SigningVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -508,8 +528,8 @@ func generateEmptyMemoVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -555,8 +575,8 @@ func generateZeroValuesVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -603,8 +623,8 @@ func generateLargeNumbersVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -650,8 +670,8 @@ func generateUnicodeVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -698,8 +718,8 @@ end`,
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -745,8 +765,8 @@ func generateMinimalVector() TestVector {
 	}
 
 	signDoc := buildSignDocFromInput(input)
-	signDocJSON, _ := signDoc.ToJSON()
-	signBytes, _ := signDoc.GetSignBytes()
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
 	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
 
 	return TestVector{
@@ -769,11 +789,16 @@ func generateMinimalVector() TestVector {
 }
 
 // buildSignDocFromInput constructs a SignDoc from test vector input.
+// Panics on invalid input since test vectors should always be valid.
 func buildSignDocFromInput(input TestVectorInput) *types.SignDoc {
 	// Parse numeric strings
 	var accountSequence, nonce uint64
-	json.Unmarshal([]byte(`"`+input.AccountSequence+`"`), (*types.StringUint64)(&accountSequence))
-	json.Unmarshal([]byte(`"`+input.Nonce+`"`), (*types.StringUint64)(&nonce))
+	if err := json.Unmarshal([]byte(`"`+input.AccountSequence+`"`), (*types.StringUint64)(&accountSequence)); err != nil {
+		panic("invalid account_sequence in test vector: " + err.Error())
+	}
+	if err := json.Unmarshal([]byte(`"`+input.Nonce+`"`), (*types.StringUint64)(&nonce)); err != nil {
+		panic("invalid nonce in test vector: " + err.Error())
+	}
 
 	// Build fee coins
 	feeCoins := make([]types.SignDocCoin, len(input.Fee.Amount))

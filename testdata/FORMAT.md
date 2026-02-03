@@ -24,9 +24,11 @@ Test vectors are stored in `signing_vectors.json` with the following structure:
 | Field | Type | Description |
 |-------|------|-------------|
 | `version` | string | Version of the test vector format |
-| `generated` | string | ISO 8601 timestamp of generation |
+| `generated` | string | ISO 8601 timestamp of generation (not part of test comparison) |
 | `description` | string | Human-readable description |
 | `vectors` | array | List of test vectors |
+
+**Note**: The `generated` timestamp is informational only and changes each time vectors are regenerated. Implementations should NOT compare this field when verifying test vectors.
 
 ## Test Vector Structure
 
@@ -91,6 +93,10 @@ The `input` object contains all data needed to construct a SignDoc:
 }
 ```
 
+**IMPORTANT: Message Ordering**
+
+Message order is significant for signing. Implementations MUST preserve the exact order of messages as provided in the `messages` array. Reordering messages will produce a different signature. This is intentional—message order can affect transaction semantics (e.g., funds transferred in message 1 may be used in message 2).
+
 ### Fee Structure
 
 ```json
@@ -101,6 +107,10 @@ The `input` object contains all data needed to construct a SignDoc:
   "gas_limit": "200000"
 }
 ```
+
+**IMPORTANT: Fee Coin Ordering**
+
+When multiple fee coins are provided, the order is significant for signing. Implementations MUST preserve the exact order of coins in the `amount` array. While implementations may choose to sort coins canonically when creating transactions, the test vectors verify that the serialization matches exactly. If your implementation sorts fee coins, ensure the sorting is deterministic and documented.
 
 ### Fee Slippage Structure
 
@@ -156,6 +166,26 @@ Examples:
 - `"42"` - Small number
 - `"18446744073709551615"` - Maximum uint64
 
+## Canonical JSON Serialization
+
+### Field Ordering
+
+The SignDoc MUST be serialized with fields in the following canonical order:
+
+```
+version, chain_id, account, account_sequence, messages, nonce, memo (if present), fee, fee_slippage
+```
+
+**IMPORTANT**: Standard JSON libraries (like Go's `json.Marshal` with maps) do not guarantee field ordering. Implementations MUST use either:
+1. A custom serializer that enforces field order, OR
+2. Struct-based serialization where field order is determined by struct definition
+
+The Punnet SDK uses struct-based serialization with explicit JSON field tags to ensure deterministic ordering.
+
+### Whitespace
+
+Canonical JSON uses no whitespace between elements. The serialization should be compact with no spaces after colons or commas.
+
 ## Hash Function
 
 Sign bytes are computed as:
@@ -169,9 +199,21 @@ Where `canonical_json_bytes` is the UTF-8 encoded canonical JSON serialization o
 
 ### Ed25519
 
-- Key size: 32 bytes (public), 64 bytes (private)
+- Key size: 32 bytes (public), 64 bytes (private/expanded)
+- Seed size: 32 bytes
 - Signature size: 64 bytes
 - Deterministic signatures: Yes
+
+**Key Format Notes**:
+
+The `ed25519` signature entry uses the **expanded 64-byte private key** (seed || public key), which is the standard format for Ed25519 signing operations.
+
+For key derivation vectors, an additional `ed25519_seed` entry may be present containing:
+- `private_key_hex`: The 32-byte **seed** (not the expanded key)
+- `public_key_hex`: The derived 32-byte public key
+- `signature_hex`: Empty string (seed entries document derivation, not signing)
+
+This distinction is important for cross-implementation testing: some libraries expose only the seed, while others use the expanded form. The seed can always be expanded to the full private key using standard Ed25519 key derivation.
 
 ### secp256k1 (Future)
 
