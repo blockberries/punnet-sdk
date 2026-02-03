@@ -69,7 +69,13 @@ var WellKnownTestKeys = struct {
 		// Deterministic seed: SHA-256("punnet-sdk-test-vector-seed-secp256k1")
 		seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256k1"))
 		seed := seedHash[:]
-		// Create private key from 32-byte seed (scalar)
+
+		// Create private key from 32-byte seed (scalar).
+		// SCALAR RANGE NOTE: The dcrd/secp256k1 library's PrivKeyFromBytes handles
+		// scalar validation internally, reducing values >= curve order (n) mod n.
+		// For test vectors with fixed seeds, this behavior is acceptable since the
+		// resulting key is deterministic. This specific seed string produces a
+		// valid scalar without reduction.
 		privateKey := secp256k1.PrivKeyFromBytes(seed)
 		publicKey := privateKey.PubKey()
 		return struct {
@@ -90,10 +96,24 @@ var WellKnownTestKeys = struct {
 		// Deterministic seed: SHA-256("punnet-sdk-test-vector-seed-secp256r1")
 		seedHash := sha256.Sum256([]byte("punnet-sdk-test-vector-seed-secp256r1"))
 		seed := seedHash[:]
-		// Create private key from 32-byte seed (scalar) on P-256 curve
+
+		// Create private key from 32-byte seed (scalar) on P-256 curve.
+		// SCALAR RANGE ASSUMPTION: The seed must be in range [1, n-1] where n is the
+		// P-256 curve order (~2^256 - 4.3×10^38). SHA-256 outputs are uniformly
+		// distributed in [0, 2^256), so the probability of seed >= n is ~10^-39,
+		// which is negligible. This specific seed string has been verified to produce
+		// a valid scalar. For production use, proper key generation should use
+		// crypto/ecdsa.GenerateKey or similar, which handles scalar validation.
 		curve := elliptic.P256()
+		d := new(big.Int).SetBytes(seed)
+
+		// Verify the scalar is valid (paranoid check for test vectors)
+		if d.Sign() == 0 || d.Cmp(curve.Params().N) >= 0 {
+			panic("seed produces invalid scalar for P-256 (this should never happen with this seed)")
+		}
+
 		privateKey := new(stdecdsa.PrivateKey)
-		privateKey.D = new(big.Int).SetBytes(seed)
+		privateKey.D = d
 		privateKey.PublicKey.Curve = curve
 		privateKey.PublicKey.X, privateKey.PublicKey.Y = curve.ScalarBaseMult(seed)
 		return struct {
@@ -1450,11 +1470,20 @@ func generateSecp256r1SigningVector() TestVector {
 	}
 }
 
-// signSecp256r1RFC6979 signs data using RFC 6979 deterministic ECDSA with P-256.
+// signSecp256r1RFC6979 signs data using deterministic ECDSA with P-256.
 // Returns a 64-byte signature [R || S] in big-endian format.
+//
+// IMPLEMENTATION NOTE: Go's crypto/ecdsa uses the random reader for entropy
+// mixing in nonce generation. By providing a deterministic reader (zeroReader),
+// we get deterministic signatures. However, this does NOT guarantee RFC 6979
+// compliance - it produces internally consistent signatures suitable for
+// cross-implementation testing within the Punnet SDK ecosystem.
+//
+// For true RFC 6979 compliance that matches external implementations, use a
+// dedicated RFC 6979 library. See issue #146 for cross-implementation validation.
 func signSecp256r1RFC6979(privateKey *stdecdsa.PrivateKey, data []byte) []byte {
-	// Use SignASN1 with zeroReader to trigger RFC 6979 deterministic k
-	// Go's crypto/ecdsa uses RFC 6979 when the random reader is deterministic
+	// Use zeroReader to get deterministic signatures from Go's crypto/ecdsa.
+	// This produces consistent signatures for test vector verification.
 	asn1Sig, err := stdecdsa.SignASN1(zeroReader{}, privateKey, data)
 	if err != nil {
 		panic("failed to sign: " + err.Error())
@@ -1475,8 +1504,9 @@ func signSecp256r1RFC6979(privateKey *stdecdsa.PrivateKey, data []byte) []byte {
 	return sig
 }
 
-// zeroReader provides a deterministic "random" source of zeros.
-// When used with ECDSA, this triggers RFC 6979 deterministic k generation.
+// zeroReader provides a deterministic source of zeros for crypto/ecdsa signing.
+// This produces deterministic signatures by providing consistent entropy to
+// Go's ECDSA implementation's internal nonce generation.
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (n int, err error) {

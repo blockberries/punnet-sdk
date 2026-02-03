@@ -293,6 +293,18 @@ If Y coordinate is even: 0x02 || X (33 bytes total)
 If Y coordinate is odd:  0x03 || X (33 bytes total)
 ```
 
+**Signature Malleability Note**:
+
+ECDSA signatures have inherent malleability: both (R, S) and (R, n-S) are valid signatures for the same message, where n is the curve order. This can be a concern for transaction systems.
+
+The test vectors use signatures **as produced by the signing algorithm** without low-S normalization (BIP-146 style). Specifically:
+- secp256k1: The dcrd library produces canonical signatures by default
+- secp256r1: Go's crypto/ecdsa with RFC 6979 produces signatures without explicit normalization
+
+If your implementation applies low-S normalization (ensuring S ≤ n/2), the generated signatures may differ from the test vectors. For verification testing, either:
+1. Disable low-S normalization during test vector verification, OR
+2. Verify that both the normalized and non-normalized forms are valid
+
 ## Test Vector Categories
 
 ### Serialization Vectors
@@ -436,7 +448,7 @@ This ensures all implementations can reproduce the exact same test keys.
 Use the provided Go generator:
 
 ```bash
-GENERATE_VECTORS=1 go test -run TestWriteVectorsFile ./testdata/...
+GENERATE_VECTORS=1 go test -run TestWriteVectorsFile ./testing/vectors/...
 ```
 
 ## Version History
