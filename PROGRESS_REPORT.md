@@ -3777,3 +3777,96 @@ The Application runtime implementation completes the Punnet SDK core framework. 
 
 The SDK is now ready for module development and blockchain application construction. All 828 tests passing with comprehensive coverage of core functionality.
 
+---
+
+## Issue #101: Deprecation Logging for Signers-Only SignDoc Fallback - COMPLETED
+
+### Overview
+Added rate-limited deprecation warnings when messages do not implement `SignDocSerializable` and fall back to signers-only mode in `ToSignDoc()`. This helps teams identify messages that need migration for full signature security.
+
+### Completion Date
+February 3, 2026
+
+---
+
+### Files Created
+
+1. **types/deprecation.go**
+   - `DeprecationLogger` struct with rate-limited warning capability
+   - `SignersOnlyFallbackDeprecation(msg Message)` for logging warnings
+   - Configuration functions: `SetDeprecationLoggingEnabled`, `SetDeprecationWarningInterval`, `SetDeprecationLogger`
+   - Thread-safe implementation with mutex protection
+   - Default rate limit: 60 seconds per message type
+
+2. **types/deprecation_test.go**
+   - Comprehensive tests for rate limiting behavior
+   - Tests for different message types tracked independently
+   - Tests for logging enable/disable functionality
+   - Tests for custom logger configuration
+
+### Files Modified
+
+1. **types/transaction.go**
+   - Added call to `SignersOnlyFallbackDeprecation()` in the signers-only fallback path
+   - Added deprecation timeline comment documenting the migration path
+
+---
+
+### Key Functionality Implemented
+
+#### Rate-Limited Deprecation Logger
+- Logs at most once per minute per message type (configurable)
+- Thread-safe for high-throughput scenarios
+- Includes message type in log for easy identification
+- Security note explains the risk of signers-only fallback
+
+#### Configuration API
+```go
+// Enable/disable deprecation warnings
+SetDeprecationLoggingEnabled(enabled bool)
+
+// Set rate limit interval (default: 60s)
+SetDeprecationWarningInterval(interval time.Duration)
+
+// Use custom logger
+SetDeprecationLogger(logger *log.Logger)
+```
+
+#### Example Log Output
+```
+DEPRECATION WARNING: message does not implement SignDocSerializable, using signers-only fallback. msg_type=/punnet.bank.v1.MsgSend security_note="signatures do not bind to full message content"
+```
+
+---
+
+### Security Context
+
+The signers-only fallback is a security weakness because signatures do not bind to full message content (amounts, recipients, etc.). This could allow signature reuse attacks where different messages with the same signers share signatures.
+
+**Deprecation Timeline**:
+- v0.x: Warning logged when fallback is used (current)
+- v1.0: Consider making `SignDocSerializable` required
+- Future: Remove signers-only fallback entirely
+
+---
+
+### Test Coverage
+
+- Rate limiting works correctly (warnings throttled per message type)
+- Different message types tracked independently
+- Logging can be disabled for testing
+- Custom loggers respected
+- Thread-safety verified
+
+---
+
+### Verification
+
+```bash
+go test ./types/... -v -run Deprecation
+# All deprecation tests passing
+
+go build ./...
+# Success - no errors or warnings
+```
+
