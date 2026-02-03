@@ -330,8 +330,22 @@ func convertMessages(msgs []Message) ([]SignDocMessage, error) {
 			}
 		} else {
 			// Fallback: only include signers (backwards-compatible)
-			// SECURITY NOTE: This fallback loses message content. Implementations
-			// should migrate to SignDocSerializable for stronger signature binding.
+			//
+			// DEPRECATED: This fallback is a security weakness and will be removed
+			// in a future version. Messages should implement SignDocSerializable
+			// to ensure signatures bind to full message content.
+			//
+			// DEPRECATION TIMELINE:
+			// - v0.x: Warning logged when fallback is used (current behavior)
+			// - v1.0: Consider making SignDocSerializable required
+			// - Future: Remove signers-only fallback entirely
+			//
+			// SECURITY NOTE: This fallback loses message content. Signatures only
+			// bind to signers, not to amounts, recipients, or other message fields.
+			// This could allow signature reuse attacks where different messages
+			// with the same signers share signatures.
+			SignersOnlyFallbackDeprecation(msg)
+
 			msgData, err = json.Marshal(map[string]interface{}{
 				"signers": msg.GetSigners(),
 			})
