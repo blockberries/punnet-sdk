@@ -697,3 +697,248 @@ func skipCI(t *testing.T) {
 		t.Skip("skipping slow test in CI")
 	}
 }
+
+func TestKeychainStore_RepairIndex(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	t.Run("empty store repair", func(t *testing.T) {
+		report, err := kcs.RepairIndex(nil)
+		require.NoError(t, err)
+		assert.Empty(t, report.StaleEntriesRemoved)
+		assert.Empty(t, report.OrphanedKeysFound)
+		assert.Equal(t, 0, report.KeysVerified)
+	})
+
+	t.Run("no repair needed", func(t *testing.T) {
+		// Store some keys
+		keys := []EncryptedKey{
+			{Name: "repair-key1", Algorithm: AlgorithmEd25519, PubKey: []byte("pub1"), PrivKeyData: []byte("priv1")},
+			{Name: "repair-key2", Algorithm: AlgorithmEd25519, PubKey: []byte("pub2"), PrivKeyData: []byte("priv2")},
+		}
+		for _, k := range keys {
+			err := kcs.Store(k.Name, k)
+			require.NoError(t, err)
+		}
+
+		report, err := kcs.RepairIndex(nil)
+		require.NoError(t, err)
+		assert.Empty(t, report.StaleEntriesRemoved)
+		assert.Empty(t, report.OrphanedKeysFound)
+		assert.Equal(t, 2, report.KeysVerified)
+
+		// Cleanup
+		_ = kcs.Delete("repair-key1")
+		_ = kcs.Delete("repair-key2")
+	})
+}
+
+func TestKeychainStore_RepairIndex_StaleEntries(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	// Store a key normally
+	key := EncryptedKey{
+		Name:        "real-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	err = kcs.Store("real-key", key)
+	require.NoError(t, err)
+
+	// Manually corrupt the index by adding a fake entry directly
+	// Get current index and add a stale entry
+	listStr, err := keyring.Get(serviceName, keychainListKey)
+	require.NoError(t, err)
+	corruptedList := listStr + ",stale-key-never-existed"
+	err = keyring.Set(serviceName, keychainListKey, corruptedList)
+	require.NoError(t, err)
+
+	// Verify the corruption is visible in List()
+	names, err := kcs.List()
+	require.NoError(t, err)
+	assert.Contains(t, names, "stale-key-never-existed")
+
+	// Run repair
+	report, err := kcs.RepairIndex(nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"stale-key-never-existed"}, report.StaleEntriesRemoved)
+	assert.Empty(t, report.OrphanedKeysFound)
+	assert.Equal(t, 1, report.KeysVerified)
+
+	// Verify the stale entry is gone
+	names, err = kcs.List()
+	require.NoError(t, err)
+	assert.NotContains(t, names, "stale-key-never-existed")
+	assert.Contains(t, names, "real-key")
+
+	// Cleanup
+	_ = kcs.Delete("real-key")
+}
+
+func TestKeychainStore_RepairIndex_OrphanedKeys(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	// Store a key normally
+	key := EncryptedKey{
+		Name:        "indexed-key",
+		Algorithm:   AlgorithmEd25519,
+		PubKey:      []byte("pub"),
+		PrivKeyData: []byte("priv"),
+	}
+	err = kcs.Store("indexed-key", key)
+	require.NoError(t, err)
+
+	// Create an orphaned key by storing directly in keychain without updating index
+	orphanData := `{"name":"orphan-key","algorithm":"ed25519","pub_key":"b3JwaGFu","priv_key_data":"b3JwaGFucHJpdg=="}`
+	err = keyring.Set(serviceName, keychainKeyPrefix+"orphan-key", orphanData)
+	require.NoError(t, err)
+
+	// Verify the orphan is not in the index
+	names, err := kcs.List()
+	require.NoError(t, err)
+	assert.NotContains(t, names, "orphan-key")
+
+	// Run repair with probe list
+	probeKeys := []string{"orphan-key", "nonexistent-key", "another-missing"}
+	report, err := kcs.RepairIndex(probeKeys)
+	require.NoError(t, err)
+	assert.Empty(t, report.StaleEntriesRemoved)
+	assert.Equal(t, []string{"orphan-key"}, report.OrphanedKeysFound)
+	assert.Equal(t, 1, report.KeysVerified) // indexed-key was verified
+
+	// Verify the orphan is now in the index
+	names, err = kcs.List()
+	require.NoError(t, err)
+	assert.Contains(t, names, "orphan-key")
+	assert.Contains(t, names, "indexed-key")
+
+	// Cleanup
+	_ = kcs.Delete("indexed-key")
+	_ = kcs.Delete("orphan-key")
+}
+
+func TestKeychainStore_RepairIndex_Combined(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	// Store some valid keys
+	validKeys := []EncryptedKey{
+		{Name: "valid1", Algorithm: AlgorithmEd25519, PubKey: []byte("pub1"), PrivKeyData: []byte("priv1")},
+		{Name: "valid2", Algorithm: AlgorithmEd25519, PubKey: []byte("pub2"), PrivKeyData: []byte("priv2")},
+	}
+	for _, k := range validKeys {
+		err := kcs.Store(k.Name, k)
+		require.NoError(t, err)
+	}
+
+	// Corrupt the index with stale entries
+	listStr, err := keyring.Get(serviceName, keychainListKey)
+	require.NoError(t, err)
+	corruptedList := listStr + ",stale1,stale2"
+	err = keyring.Set(serviceName, keychainListKey, corruptedList)
+	require.NoError(t, err)
+
+	// Create orphaned keys
+	orphanData := `{"name":"orphan1","algorithm":"ed25519","pub_key":"cHVi","priv_key_data":"cHJpdg=="}`
+	err = keyring.Set(serviceName, keychainKeyPrefix+"orphan1", orphanData)
+	require.NoError(t, err)
+
+	// Run repair with probe list
+	report, err := kcs.RepairIndex([]string{"orphan1", "orphan2"})
+	require.NoError(t, err)
+
+	// Verify results
+	assert.Len(t, report.StaleEntriesRemoved, 2)
+	assert.Contains(t, report.StaleEntriesRemoved, "stale1")
+	assert.Contains(t, report.StaleEntriesRemoved, "stale2")
+	assert.Equal(t, []string{"orphan1"}, report.OrphanedKeysFound)
+	assert.Equal(t, 2, report.KeysVerified) // valid1 and valid2
+
+	// Verify the final state
+	names, err := kcs.List()
+	require.NoError(t, err)
+	assert.Len(t, names, 3) // valid1, valid2, orphan1
+	assert.Contains(t, names, "valid1")
+	assert.Contains(t, names, "valid2")
+	assert.Contains(t, names, "orphan1")
+	assert.NotContains(t, names, "stale1")
+	assert.NotContains(t, names, "stale2")
+
+	// Cleanup
+	_ = kcs.Delete("valid1")
+	_ = kcs.Delete("valid2")
+	_ = kcs.Delete("orphan1")
+}
+
+func TestKeychainStore_RepairIndex_ClosedStore(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	// Close the store
+	err = kcs.Close()
+	require.NoError(t, err)
+
+	// RepairIndex should return ErrKeyStoreClosed
+	_, err = kcs.RepairIndex(nil)
+	assert.ErrorIs(t, err, ErrKeyStoreClosed)
+}
+
+func TestKeychainStore_RepairIndex_InvalidProbeKeys(t *testing.T) {
+	skipIfNoKeychain(t)
+	serviceName := testServiceName(t)
+	cleanupKeychain(t, serviceName)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
+	kcs := ks.(*KeychainStore)
+
+	// Create a valid orphan
+	orphanData := `{"name":"valid-orphan","algorithm":"ed25519","pub_key":"cHVi","priv_key_data":"cHJpdg=="}`
+	err = keyring.Set(serviceName, keychainKeyPrefix+"valid-orphan", orphanData)
+	require.NoError(t, err)
+
+	// Run repair with mix of valid and invalid probe keys
+	probeKeys := []string{
+		"valid-orphan",
+		"",               // empty - invalid
+		"../path/attack", // path traversal - invalid
+		".hidden",        // starts with dot - invalid
+	}
+
+	report, err := kcs.RepairIndex(probeKeys)
+	require.NoError(t, err)
+
+	// Should only find the valid orphan, invalid names are skipped
+	assert.Equal(t, []string{"valid-orphan"}, report.OrphanedKeysFound)
+
+	// Cleanup
+	_ = kcs.Delete("valid-orphan")
+}
