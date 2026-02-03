@@ -589,15 +589,18 @@ func p256Order() *big.Int {
 // BenchmarkSignThroughput compares signing throughput across algorithms.
 // This is the primary benchmark for comparing algorithm performance.
 //
-// Expected results (approximate, varies by hardware):
-// - Ed25519: ~50,000-70,000 ops/sec (fastest, uses native Go implementation)
-// - secp256k1: ~20,000-30,000 ops/sec (RFC 6979 deterministic nonce)
-// - secp256r1: ~15,000-25,000 ops/sec (RFC 6979 + manual low-S normalization)
+// Performance varies significantly by platform. On ARM64 (Apple Silicon),
+// Go's native P-256 uses assembly optimizations that outperform other curves:
+// - secp256r1: ~90,000-100,000 ops/sec (fastest on ARM64, assembly-optimized)
+// - Ed25519: ~70,000-80,000 ops/sec
+// - secp256k1: ~40,000-50,000 ops/sec
 //
-// The secp256k1/r1 algorithms are slower due to:
-// 1. RFC 6979 HMAC-DRBG nonce generation (secp256k1 via dcrd, secp256r1 custom)
-// 2. Field arithmetic on 256-bit curve (vs Ed25519's optimized 255-bit ops)
-// 3. Low-S normalization for malleability protection
+// On x86_64 without assembly optimizations, Ed25519 is typically fastest.
+//
+// Implementation notes:
+// - secp256k1: Uses RFC 6979 deterministic nonce generation via dcrd library
+// - secp256r1: Uses RFC 6979 deterministic nonce generation (custom implementation)
+// - Both ECDSA curves apply low-S normalization for malleability protection
 func BenchmarkSignThroughput(b *testing.B) {
 	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
 	data := []byte("benchmark message for signing throughput test")
@@ -774,10 +777,10 @@ func BenchmarkVerifyBatch(b *testing.B) {
 // Runs many sign operations and reports total allocations.
 // Ideal: minimal allocations per operation to reduce GC pauses.
 //
-// Expected allocations per sign:
-// - Ed25519: 1 alloc (64-byte signature slice)
-// - secp256k1: 1-2 allocs (signature + intermediate)
-// - secp256r1: 3-5 allocs (RFC 6979 state + big.Int operations)
+// Measured allocations per sign (run benchmarks for current values):
+// - Ed25519: ~1 alloc (64-byte signature slice)
+// - secp256k1: ~29 allocs (dcrd library internals + big.Int operations)
+// - secp256r1: ~69 allocs (Go crypto/ecdsa internals + big.Int operations)
 func BenchmarkSignMemoryPressure(b *testing.B) {
 	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
 	data := []byte("memory pressure test message")
