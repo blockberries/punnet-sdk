@@ -1,0 +1,28 @@
+# .golangci.yml
+#
+# Minimal config for golangci-lint v2.x compatibility.
+# Added as part of the v1 -> v2 upgrade (PR #89).
+#
+# golangci-lint v2 has stricter errcheck defaults than v1. This config
+# excludes errcheck warnings for deferred Close/Flush calls, which is
+# a common Go pattern where errors are intentionally ignored because
+# there's often nothing actionable in a defer context.
+#
+# See issue #98 for tracking proper error handling improvements.
+#
+# Maintainer: The Glue
+
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    rules:
+      # Exclude errcheck warnings for deferred Close/Flush calls.
+      # Pattern matches errors like:
+      #   "Error return value of `iter.Close` is not checked"
+      # on lines matching: defer something.Close() or .Flush()
+      - linters:
+          - errcheck
+        text: "Error return value of .+ is not checked"
+        source: "defer .+\\.(Close|Flush)\\("
