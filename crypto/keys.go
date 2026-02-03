@@ -107,20 +107,13 @@ func (k *ed25519PublicKey) Verify(data, signature []byte) bool {
 }
 
 // Equals checks equality using constant-time comparison.
+// Complexity: O(n) where n is key length (32 bytes for Ed25519).
+// Uses crypto/subtle.ConstantTimeCompare to prevent timing attacks.
 func (k *ed25519PublicKey) Equals(other PublicKey) bool {
 	if other == nil || other.Algorithm() != AlgorithmEd25519 {
 		return false
 	}
-	otherBytes := other.Bytes()
-	if len(k.key) != len(otherBytes) {
-		return false
-	}
-	// Constant-time comparison
-	var diff byte
-	for i := 0; i < len(k.key); i++ {
-		diff |= k.key[i] ^ otherBytes[i]
-	}
-	return diff == 0
+	return subtle.ConstantTimeCompare(k.key, other.Bytes()) == 1
 }
 
 // String returns Base64-encoded public key.
