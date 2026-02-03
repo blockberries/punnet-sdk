@@ -42,6 +42,12 @@ func (a Algorithm) IsValid() bool {
 	}
 }
 
+// KeySize returns the public key size in bytes for this algorithm.
+// Alias for PublicKeySize() for API compatibility.
+func (a Algorithm) KeySize() int {
+	return a.PublicKeySize()
+}
+
 // PublicKeySize returns the expected public key size in bytes.
 func (a Algorithm) PublicKeySize() int {
 	switch a {
@@ -85,11 +91,11 @@ func (a Algorithm) MarshalJSON() ([]byte, error) {
 func (a *Algorithm) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
-		return err
+		return fmt.Errorf("algorithm must be a string: %w", err)
 	}
 	alg := Algorithm(s)
 	if !alg.IsValid() {
-		return fmt.Errorf("unsupported algorithm: %s", s)
+		return fmt.Errorf("unknown algorithm: %q", s)
 	}
 	*a = alg
 	return nil

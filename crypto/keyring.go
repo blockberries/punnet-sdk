@@ -18,20 +18,21 @@ const (
 	MaxSignDataLength = 64 * 1024 * 1024
 )
 
-// Keyring error types.
+// Keyring error types - these are aliases to the errors in errors.go
+// for backwards compatibility. Prefer using errors from errors.go.
 var (
-	ErrKeyNotFound      = errors.New("key not found")
-	ErrKeyExists        = errors.New("key already exists")
-	ErrInvalidPassword  = errors.New("invalid password")
-	ErrInvalidKey       = errors.New("invalid key data")
-	ErrInvalidKeyName   = errors.New("invalid key name")
-	ErrDataTooLarge     = errors.New("data exceeds maximum sign length")
+	ErrKeyNotFound  = errors.New("key not found")
+	ErrKeyExists    = errors.New("key already exists")
+	ErrInvalidKey   = errors.New("invalid key data")
+	ErrDataTooLarge = errors.New("data exceeds maximum sign length")
 )
 
-// validateKeyName validates a key name for security.
+// validateKeyNameSimple validates a key name for security.
 // Rejects empty names, overly long names, and names with dangerous characters.
 // Complexity: O(n) where n is name length.
-func validateKeyName(name string) error {
+// Note: This is a simpler version used by Keyring; see file_keystore.go for
+// the full validation used by FileKeyStore.
+func validateKeyNameSimple(name string) error {
 	if name == "" {
 		return fmt.Errorf("%w: name cannot be empty", ErrInvalidKeyName)
 	}
@@ -88,10 +89,10 @@ type Keyring interface {
 	Sign(name string, data []byte) ([]byte, error)
 }
 
-// defaultKeyring implements Keyring with a pluggable KeyStore backend.
+// defaultKeyring implements Keyring with a pluggable SimpleKeyStore backend.
 // Uses an LRU-style cache for hot keys to minimize store lookups.
 type defaultKeyring struct {
-	store KeyStore
+	store SimpleKeyStore
 
 	// mu protects the cache
 	mu sync.RWMutex
@@ -117,7 +118,7 @@ func WithCacheSize(size int) KeyringOption {
 
 // NewKeyring creates a new keyring with the given storage backend.
 // Complexity: O(1).
-func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
+func NewKeyring(store SimpleKeyStore, opts ...KeyringOption) Keyring {
 	kr := &defaultKeyring{
 		store:        store,
 		cache:        make(map[string]Signer),
@@ -133,7 +134,7 @@ func NewKeyring(store KeyStore, opts ...KeyringOption) Keyring {
 // NewKey generates a new key.
 func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := validateKeyName(name); err != nil {
+	if err := validateKeyNameSimple(name); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +177,7 @@ func (kr *defaultKeyring) NewKey(name string, algo Algorithm) (Signer, error) {
 // ImportKey imports an existing private key.
 func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algorithm) (Signer, error) {
 	// Validate key name (prevents path traversal, injection attacks)
-	if err := validateKeyName(name); err != nil {
+	if err := validateKeyNameSimple(name); err != nil {
 		return nil, err
 	}
 

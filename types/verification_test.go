@@ -15,8 +15,8 @@ type testMessage struct {
 	Signers []AccountName `json:"signers"`
 }
 
-func (m *testMessage) Type() string             { return m.MsgType }
-func (m *testMessage) ValidateBasic() error     { return nil }
+func (m *testMessage) Type() string              { return m.MsgType }
+func (m *testMessage) ValidateBasic() error      { return nil }
 func (m *testMessage) GetSigners() []AccountName { return m.Signers }
 
 func TestTransaction_ToSignDoc(t *testing.T) {
@@ -36,9 +36,9 @@ func TestTransaction_ToSignDoc(t *testing.T) {
 
 	assert.Equal(t, SignDocVersion, signDoc.Version)
 	assert.Equal(t, "test-chain", signDoc.ChainID)
-	assert.Equal(t, uint64(42), signDoc.AccountSequence)
+	assert.Equal(t, StringUint64(42), signDoc.AccountSequence)
 	assert.Equal(t, "alice", signDoc.Account)
-	assert.Equal(t, uint64(42), signDoc.Nonce)
+	assert.Equal(t, StringUint64(42), signDoc.Nonce)
 	assert.Equal(t, "test memo", signDoc.Memo)
 	require.Len(t, signDoc.Messages, 1)
 	assert.Equal(t, "/punnet.bank.v1.MsgSend", signDoc.Messages[0].Type)
@@ -566,4 +566,172 @@ func makeTestMessageJSON(t *testing.T, msgType string, signers []AccountName) (M
 	})
 	require.NoError(t, err)
 	return msg, data
+}
+
+// ============================================================================
+// Benchmarks for VerifyAuthorization optimization (issue #36)
+// ============================================================================
+
+// BenchmarkVerifyAuthorization measures the full verification path.
+// Optimized in issue #36 to eliminate redundant SignDoc construction.
+//
+// Before optimization: 2x ToSignDoc + 3x ToJSON
+// After optimization:  1x ToSignDoc + 2x ToJSON (reuse json1 for hash)
+func BenchmarkVerifyAuthorization(b *testing.B) {
+	// Setup: generate key and create valid signed transaction
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	account := &Account{
+		Name: "alice",
+		Authority: Authority{
+			Threshold:      1,
+			KeyWeights:     map[string]uint64{string(pub): 1},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 1,
+	}
+
+	msg := &testMessage{
+		MsgType: "/punnet.bank.v1.MsgSend",
+		Signers: []AccountName{"alice"},
+	}
+
+	tx := &Transaction{
+		Account:  "alice",
+		Messages: []Message{msg},
+		Nonce:    1,
+		Memo:     "benchmark transaction",
+	}
+
+	signDoc := tx.ToSignDoc("test-chain", 1)
+	signBytes, _ := signDoc.GetSignBytes()
+	sig := ed25519.Sign(priv, signBytes)
+
+	tx.Authorization = &Authorization{
+		Signatures:            []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: sig}},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		err := tx.VerifyAuthorization("test-chain", account, getter)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkVerifyAuthorization_MultiSig measures verification with multiple signatures.
+func BenchmarkVerifyAuthorization_MultiSig(b *testing.B) {
+	pub1, priv1, _ := ed25519.GenerateKey(nil)
+	pub2, priv2, _ := ed25519.GenerateKey(nil)
+
+	account := &Account{
+		Name: "multisig",
+		Authority: Authority{
+			Threshold: 2,
+			KeyWeights: map[string]uint64{
+				string(pub1): 1,
+				string(pub2): 1,
+			},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 1,
+	}
+
+	msg := &testMessage{
+		MsgType: "/msg",
+		Signers: []AccountName{"multisig"},
+	}
+
+	tx := &Transaction{
+		Account:  "multisig",
+		Messages: []Message{msg},
+		Nonce:    1,
+	}
+
+	signDoc := tx.ToSignDoc("test-chain", 1)
+	signBytes, _ := signDoc.GetSignBytes()
+
+	sig1 := ed25519.Sign(priv1, signBytes)
+	sig2 := ed25519.Sign(priv2, signBytes)
+
+	tx.Authorization = &Authorization{
+		Signatures: []Signature{
+			{Algorithm: AlgorithmEd25519, PubKey: pub1, Signature: sig1},
+			{Algorithm: AlgorithmEd25519, PubKey: pub2, Signature: sig2},
+		},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		err := tx.VerifyAuthorization("test-chain", account, getter)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkVerifyAuthorization_LargeMessages measures verification with many messages.
+func BenchmarkVerifyAuthorization_LargeMessages(b *testing.B) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+
+	account := &Account{
+		Name: "alice",
+		Authority: Authority{
+			Threshold:      1,
+			KeyWeights:     map[string]uint64{string(pub): 1},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 1,
+	}
+
+	// Create 10 messages
+	messages := make([]Message, 10)
+	for i := range messages {
+		messages[i] = &testMessage{
+			MsgType: "/punnet.bank.v1.MsgSend",
+			Signers: []AccountName{"alice"},
+		}
+	}
+
+	tx := &Transaction{
+		Account:  "alice",
+		Messages: messages,
+		Nonce:    1,
+		Memo:     "benchmark with many messages",
+	}
+
+	signDoc := tx.ToSignDoc("test-chain", 1)
+	signBytes, _ := signDoc.GetSignBytes()
+	sig := ed25519.Sign(priv, signBytes)
+
+	tx.Authorization = &Authorization{
+		Signatures:            []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: sig}},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		err := tx.VerifyAuthorization("test-chain", account, getter)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

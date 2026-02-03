@@ -1,20 +1,17 @@
 package crypto
 
-// Signer represents an entity that can sign data.
-// Implementations should be thread-safe.
+// Signer is the interface for signing operations.
+// Implementations must never expose private key material.
 type Signer interface {
-	// Sign signs the given data and returns a signature.
-	// Complexity: O(n) where n is data length.
-	// Memory: Allocates new slice for signature (64 bytes for Ed25519).
-	Sign(data []byte) ([]byte, error)
+	// Algorithm returns the signing algorithm.
+	Algorithm() Algorithm
 
-	// PublicKey returns the signer's public key.
-	// Complexity: O(1).
+	// PublicKey returns the public key.
 	PublicKey() PublicKey
 
-	// Algorithm returns the signing algorithm.
-	// Complexity: O(1).
-	Algorithm() Algorithm
+	// Sign signs the message and returns the signature.
+	// The message should typically be a hash of the actual data.
+	Sign(message []byte) ([]byte, error)
 }
 
 // Signature represents a cryptographic signature with metadata.
