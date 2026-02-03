@@ -369,9 +369,10 @@ func isCompactJSON(data []byte) bool {
 		}
 
 		if inString {
-			if b == '\\' {
+			switch b {
+			case '\\':
 				escape = true
-			} else if b == '"' {
+			case '"':
 				inString = false
 			}
 			continue
