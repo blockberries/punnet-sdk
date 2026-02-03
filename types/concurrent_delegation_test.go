@@ -780,6 +780,266 @@ func TestConcurrent_DocumentedSemantics(t *testing.T) {
 // These tests are specifically designed to trigger race conditions if any exist.
 // Run with: go test -race ./types -run TestConcurrent
 
+// =============================================================================
+// Scenario 5: TOCTOU Exploit Test
+// =============================================================================
+//
+// This test explicitly attempts to exploit the TOCTOU gap documented above.
+// It's designed to demonstrate whether the current implementation is
+// "accidentally safe" or actually vulnerable to concurrent manipulation.
+//
+// Suggested by The Tinkerer in PR review.
+
+func TestConcurrent_TOCTOUExploitAttempt(t *testing.T) {
+	// SCENARIO: Attacker attempts to exploit TOCTOU window
+	//
+	// Setup:
+	// - Alice has threshold=2
+	// - Alice delegates to Bob (weight=1)
+	// - Bob has threshold=1 and a valid key
+	// - Attacker has Bob's signature
+	//
+	// Attack attempt:
+	// 1. Verification starts
+	// 2. Bob is fetched via getter (triggers callback)
+	// 3. Callback adds a new "malicious" delegation to Alice with weight=1
+	// 4. If successful, attacker achieves threshold=2 with only Bob's weight=1
+	//    plus the injected malicious delegation weight=1
+	//
+	// EXPECTED RESULT: Attack FAILS because top-level account uses snapshot semantics
+
+	t.Run("TOCTOU exploit attempt via mid-verification delegation injection", func(t *testing.T) {
+		bobPub, bobPriv, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+		maliciousPub, maliciousPriv, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+
+		getter := newConcurrentMockAccountGetter()
+
+		// Malicious account controlled by attacker
+		malicious := &Account{
+			Name: "malicious",
+			Authority: Authority{
+				Threshold:      1,
+				KeyWeights:     map[string]uint64{string(maliciousPub): 1},
+				AccountWeights: make(map[AccountName]uint64),
+			},
+			Nonce: 0,
+		}
+
+		// Bob: legitimate delegate
+		bob := &Account{
+			Name: "bob",
+			Authority: Authority{
+				Threshold:      1,
+				KeyWeights:     map[string]uint64{string(bobPub): 1},
+				AccountWeights: make(map[AccountName]uint64),
+			},
+			Nonce: 0,
+		}
+
+		// Alice: threshold=2, only delegates to Bob (weight=1)
+		// Attacker cannot satisfy threshold with Bob alone
+		alice := &Account{
+			Name: "alice",
+			Authority: Authority{
+				Threshold:      2, // Requires 2, but only Bob (weight=1) is delegated
+				KeyWeights:     make(map[string]uint64),
+				AccountWeights: map[AccountName]uint64{"bob": 1},
+			},
+			Nonce: 0,
+		}
+
+		getter.setAccount(alice)
+		getter.setAccount(bob)
+		getter.setAccount(malicious)
+
+		message := []byte("TOCTOU exploit test")
+		bobSig := ed25519.Sign(bobPriv, message)
+		maliciousSig := ed25519.Sign(maliciousPriv, message)
+
+		// Track if injection happened
+		injectionDone := atomic.Bool{}
+
+		// ATTACK: When bob is accessed, inject malicious delegation into alice
+		getter.onGetAccount = func(name AccountName) {
+			if name == "bob" && !injectionDone.Load() {
+				injectionDone.Store(true)
+				// Inject malicious delegation with weight=1
+				getter.updateAccount("alice", func(acc *Account) {
+					acc.Authority.AccountWeights["malicious"] = 1
+				})
+			}
+		}
+
+		// Authorization includes both Bob and Malicious
+		// If TOCTOU exploit works, both would contribute weight
+		auth := &Authorization{
+			Signatures: []Signature{},
+			AccountAuthorizations: map[AccountName]*Authorization{
+				"bob": {
+					Signatures: []Signature{
+						{PubKey: bobPub, Signature: bobSig},
+					},
+					AccountAuthorizations: make(map[AccountName]*Authorization),
+				},
+				"malicious": {
+					Signatures: []Signature{
+						{PubKey: maliciousPub, Signature: maliciousSig},
+					},
+					AccountAuthorizations: make(map[AccountName]*Authorization),
+				},
+			},
+		}
+
+		// Get alice BEFORE injection (this is the snapshot used for verification)
+		aliceSnapshot, _ := getter.GetAccount("alice")
+		injectionDone.Store(false) // Reset for test
+
+		err = auth.VerifyAuthorization(aliceSnapshot, message, getter)
+
+		// SECURITY PROPERTY: Attack should FAIL
+		// The top-level account (alice) uses snapshot semantics.
+		// The malicious delegation injected during verification is NOT
+		// visible to the weight calculation for the top-level account.
+		assert.Error(t, err, "TOCTOU exploit should FAIL - top-level uses snapshot semantics")
+
+		if err != nil {
+			t.Logf("Attack correctly blocked: %v", err)
+		} else {
+			t.Error("SECURITY VULNERABILITY: TOCTOU exploit succeeded! Top-level snapshot semantics may be broken.")
+		}
+
+		// Verify injection did happen (to confirm the test setup worked)
+		assert.True(t, injectionDone.Load(), "Injection callback should have been triggered")
+
+		// Clean up
+		getter.onGetAccount = nil
+	})
+
+	t.Run("TOCTOU exploit via delegated account modification", func(t *testing.T) {
+		// SCENARIO: More subtle attack targeting delegated accounts
+		//
+		// Setup:
+		// - Alice delegates to Bob
+		// - Bob delegates to Charlie (threshold=2, needs 2 keys)
+		// - Charlie has 1 key with weight=1 (insufficient)
+		// - Attacker has Charlie's signature
+		//
+		// Attack:
+		// 1. During verification, when Bob's delegations are checked
+		// 2. Attacker modifies Charlie's threshold from 2 to 1
+		// 3. Now Charlie's single signature satisfies the lowered threshold
+		//
+		// EXPECTED: Attack MAY succeed due to live semantics for delegated accounts
+
+		charliePub, charliePriv, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+		bobPub, _, err := ed25519.GenerateKey(nil)
+		require.NoError(t, err)
+
+		getter := newConcurrentMockAccountGetter()
+
+		// Charlie: initially threshold=2, has only 1 key with weight=1
+		// Cannot satisfy own threshold legitimately
+		charlie := &Account{
+			Name: "charlie",
+			Authority: Authority{
+				Threshold:      2, // Impossible to satisfy with single weight=1 key
+				KeyWeights:     map[string]uint64{string(charliePub): 1},
+				AccountWeights: make(map[AccountName]uint64),
+			},
+			Nonce: 0,
+		}
+
+		// Bob: delegates to Charlie
+		bob := &Account{
+			Name: "bob",
+			Authority: Authority{
+				Threshold:      1,
+				KeyWeights:     map[string]uint64{string(bobPub): 1},
+				AccountWeights: map[AccountName]uint64{"charlie": 1},
+			},
+			Nonce: 0,
+		}
+
+		// Alice: delegates to Bob
+		alice := &Account{
+			Name: "alice",
+			Authority: Authority{
+				Threshold:      1,
+				KeyWeights:     make(map[string]uint64),
+				AccountWeights: map[AccountName]uint64{"bob": 1},
+			},
+			Nonce: 0,
+		}
+
+		getter.setAccount(alice)
+		getter.setAccount(bob)
+		getter.setAccount(charlie)
+
+		message := []byte("delegated TOCTOU test")
+		charlieSig := ed25519.Sign(charliePriv, message)
+
+		// Track modification
+		modificationDone := atomic.Bool{}
+
+		// ATTACK: When bob is accessed, lower charlie's threshold
+		getter.onGetAccount = func(name AccountName) {
+			if name == "bob" && !modificationDone.Load() {
+				modificationDone.Store(true)
+				// Lower Charlie's threshold to make it satisfiable
+				getter.updateAccount("charlie", func(acc *Account) {
+					acc.Authority.Threshold = 1
+				})
+			}
+		}
+
+		auth := &Authorization{
+			Signatures: []Signature{},
+			AccountAuthorizations: map[AccountName]*Authorization{
+				"bob": {
+					Signatures: []Signature{},
+					AccountAuthorizations: map[AccountName]*Authorization{
+						"charlie": {
+							Signatures: []Signature{
+								{PubKey: charliePub, Signature: charlieSig},
+							},
+							AccountAuthorizations: make(map[AccountName]*Authorization),
+						},
+					},
+				},
+			},
+		}
+
+		aliceSnapshot, _ := getter.GetAccount("alice")
+		modificationDone.Store(false)
+
+		err = auth.VerifyAuthorization(aliceSnapshot, message, getter)
+
+		// DOCUMENTED BEHAVIOR: This attack MAY succeed because delegated accounts
+		// use live semantics. The result depends on ordering:
+		// - If charlie's threshold is lowered BEFORE charlie is fetched: SUCCESS
+		// - If charlie is fetched BEFORE threshold is lowered: FAIL
+		//
+		// In this test, we lower threshold when BOB is accessed, which happens
+		// before charlie is fetched, so the attack should succeed.
+
+		if err == nil {
+			t.Log("KNOWN VULNERABILITY: Delegated account TOCTOU exploit succeeded.")
+			t.Log("This is expected with live semantics for delegated accounts.")
+			t.Log("Production systems should implement snapshot semantics at storage layer.")
+		} else {
+			t.Logf("Attack blocked (timing-dependent): %v", err)
+		}
+
+		// This isn't an assertion failure - we're documenting behavior
+		assert.True(t, modificationDone.Load(), "Modification callback should have been triggered")
+
+		getter.onGetAccount = nil
+	})
+}
+
 func TestConcurrent_RaceDetectorValidation(t *testing.T) {
 	// Generate multiple key pairs
 	keys := make([]struct {

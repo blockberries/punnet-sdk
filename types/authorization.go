@@ -406,6 +406,19 @@ func (a *Authorization) VerifyAuthorization(account *Account, message []byte, ge
 // calculateWeight recursively calculates the total authorization weight
 // It implements cycle detection using DFS with a visited set.
 //
+// CONCURRENCY SEMANTICS (see concurrent_delegation_test.go for tests):
+//   - Top-level account: Uses SNAPSHOT semantics. The authority passed to
+//     VerifyAuthorization() is used directly; changes in the getter do not
+//     affect the top-level account's authority during verification.
+//   - Delegated accounts: Uses LIVE semantics. getter.GetAccount() is called
+//     for each delegated account, so concurrent modifications ARE visible.
+//
+// SECURITY IMPLICATION: The live semantics for delegated accounts creates a
+// potential TOCTOU (time-of-check-time-of-use) window. An attacker who can
+// modify delegations concurrently could potentially manipulate verification.
+// For production systems with concurrent delegation modifications, consider
+// implementing snapshot semantics at the storage layer.
+//
 // SECURITY: This function deduplicates signatures by public key to prevent
 // attackers from submitting multiple copies of the same signature to inflate
 // their authorization weight. See Issue #30.
