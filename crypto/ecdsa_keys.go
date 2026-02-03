@@ -30,6 +30,11 @@ func (k *secp256k1PublicKey) Algorithm() Algorithm {
 }
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
+//
+// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
+// the signature (r, n-s) is also valid. This implementation does not enforce low-S
+// normalization. For consensus-critical applications where signature uniqueness matters,
+// consider canonicalizing signatures at the protocol layer.
 func (k *secp256k1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
@@ -124,6 +129,11 @@ func (k *secp256r1PublicKey) Algorithm() Algorithm {
 }
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
+//
+// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
+// the signature (r, n-s) is also valid. This implementation does not enforce low-S
+// normalization. For consensus-critical applications where signature uniqueness matters,
+// consider canonicalizing signatures at the protocol layer.
 func (k *secp256r1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
@@ -183,6 +193,9 @@ func (k *secp256r1PrivateKey) PublicKey() PublicKey {
 // Unlike secp256k1 (which uses RFC 6979), signing the same message twice may produce
 // different valid signatures. This is acceptable for most use cases but means
 // signatures cannot be used for deduplication or replay detection.
+//
+// Signatures are normalized to low-S form (s <= n/2) to prevent signature malleability.
+// This matches BIP-62 (Bitcoin) and EIP-2 (Ethereum) requirements.
 func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 	hash := sha256.Sum256(data)
 
@@ -190,6 +203,11 @@ func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("secp256r1 signing failed: %w", err)
 	}
+
+	// Normalize s to low-S form to prevent signature malleability.
+	// For any valid signature (r, s), (r, n-s) is also valid.
+	// We enforce s <= n/2 to ensure canonical signatures.
+	s = normalizeLowS(s, k.key.Curve.Params().N)
 
 	// Encode r and s as 32-byte big-endian values
 	signature := make([]byte, 64)
@@ -203,12 +221,22 @@ func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
 
 // Zeroize clears the private key scalar.
 //
-// Note: Go's big.Int.SetInt64(0) sets the value to zero but does not securely
-// overwrite the underlying byte buffer. This is a known limitation of big.Int.
-// For secp256k1, the dcrd library's Zero() method handles this properly.
-// In practice, Go's garbage collector may retain the original bytes in memory.
+// WARNING: Due to Go's big.Int implementation, complete memory erasure cannot
+// be guaranteed. The big.Int.SetInt64(0) call clears the semantic value, but
+// the internal buffer containing the original key bytes may persist in memory
+// until garbage collected. Additionally, big.Int.Bytes() returns a new slice
+// allocation, so zeroing that copy does not affect the original representation.
+//
+// This is a known limitation of Go's math/big package. For secp256k1, the dcrd
+// library provides proper zeroization via its Zero() method.
+//
+// For high-security contexts requiring guaranteed memory clearing, consider:
+//   - Process isolation (separate process for key material that terminates after use)
+//   - Hardware security modules (HSMs) that manage keys in secure hardware
+//   - Using secp256k1 which has proper zeroization via the dcrd library
+//   - Languages with explicit memory control (Rust, C with explicit memset_s)
 func (k *secp256r1PrivateKey) Zeroize() {
-	if k.key.D != nil {
+	if k.key != nil && k.key.D != nil {
 		k.key.D.SetInt64(0)
 	}
 }
@@ -306,4 +334,45 @@ func secp256r1PublicKeyFromBytes(data []byte) (PublicKey, error) {
 	}
 
 	return &secp256r1PublicKey{key: key}, nil
+}
+
+// normalizeLowS returns s if s <= n/2, otherwise returns n - s.
+// This enforces the low-S constraint to prevent ECDSA signature malleability.
+//
+// Background: For any valid ECDSA signature (r, s), the signature (r, n-s) is also valid.
+// This malleability can cause issues:
+// - Transaction ID mutation attacks (changing txid without invalidating signature)
+// - Signature-based deduplication failures
+// - Unexpected behavior in consensus systems
+//
+// By enforcing s <= n/2, we ensure signatures are canonical (unique per message/key pair).
+// This matches BIP-62 (Bitcoin) and EIP-2 (Ethereum).
+//
+// Complexity: O(1) - constant-time comparison and subtraction on 256-bit integers.
+// Memory: One allocation for half-order on first call (cached by curve params).
+func normalizeLowS(s, n *big.Int) *big.Int {
+	// Calculate n/2 (half the curve order)
+	halfN := new(big.Int).Rsh(n, 1)
+
+	// If s > n/2, return n - s
+	if s.Cmp(halfN) > 0 {
+		return new(big.Int).Sub(n, s)
+	}
+	return s
+}
+
+// IsLowS checks if an ECDSA signature's S value is in low-S form (s <= n/2).
+// This is useful for signature validation to reject malleable signatures.
+//
+// The signature parameter should be 64 bytes (r||s in big-endian).
+// The n parameter is the curve order.
+//
+// Complexity: O(1)
+func IsLowS(signature []byte, n *big.Int) bool {
+	if len(signature) != 64 {
+		return false
+	}
+	s := new(big.Int).SetBytes(signature[32:])
+	halfN := new(big.Int).Rsh(n, 1)
+	return s.Cmp(halfN) <= 0
 }

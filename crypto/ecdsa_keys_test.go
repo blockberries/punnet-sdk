@@ -1,10 +1,14 @@
 package crypto
 
 import (
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 func TestSecp256k1KeyGeneration(t *testing.T) {
@@ -356,4 +360,194 @@ func TestSecp256r1Zeroize(t *testing.T) {
 	// Note: We can't easily test that the key was actually zeroized
 	// without inspecting internal state. The test here just ensures
 	// the method doesn't panic.
+}
+
+// TestSecp256r1LowSNormalization verifies that secp256r1 signatures are normalized
+// to low-S form (s <= n/2) to prevent signature malleability.
+func TestSecp256r1LowSNormalization(t *testing.T) {
+	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey failed: %v", err)
+	}
+
+	n := elliptic.P256().Params().N
+
+	// Sign multiple messages and verify all signatures have low-S
+	for i := 0; i < 100; i++ {
+		message := []byte("test message " + string(rune(i)))
+		sig, err := key.Sign(message)
+		if err != nil {
+			t.Fatalf("Sign failed: %v", err)
+		}
+
+		if !IsLowS(sig, n) {
+			t.Errorf("iteration %d: signature S value is not in low-S form", i)
+		}
+
+		// Verify signature is still valid
+		if !key.PublicKey().Verify(message, sig) {
+			t.Errorf("iteration %d: signature verification failed", i)
+		}
+	}
+}
+
+// TestSecp256k1LowSNormalization verifies that secp256k1 signatures from dcrd
+// are already in low-S form (RFC 6979 + dcrd implementation).
+func TestSecp256k1LowSNormalization(t *testing.T) {
+	key, err := GeneratePrivateKey(AlgorithmSecp256k1)
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey failed: %v", err)
+	}
+
+	n := secp256k1.Params().N
+
+	// Sign multiple messages and verify all signatures have low-S
+	for i := 0; i < 100; i++ {
+		message := []byte("test message " + string(rune(i)))
+		sig, err := key.Sign(message)
+		if err != nil {
+			t.Fatalf("Sign failed: %v", err)
+		}
+
+		if !IsLowS(sig, n) {
+			t.Errorf("iteration %d: secp256k1 signature S value is not in low-S form", i)
+		}
+	}
+}
+
+// TestNormalizeLowS tests the normalizeLowS helper function directly.
+func TestNormalizeLowS(t *testing.T) {
+	// Use P-256 curve order for testing
+	n := elliptic.P256().Params().N
+	halfN := new(big.Int).Rsh(n, 1)
+
+	tests := []struct {
+		name     string
+		s        *big.Int
+		expected string // "unchanged" or "normalized"
+	}{
+		{
+			name:     "s = 1 (already low)",
+			s:        big.NewInt(1),
+			expected: "unchanged",
+		},
+		{
+			name:     "s = n/2 (boundary, should be unchanged)",
+			s:        new(big.Int).Set(halfN),
+			expected: "unchanged",
+		},
+		{
+			name:     "s = n/2 + 1 (just above boundary, should normalize)",
+			s:        new(big.Int).Add(halfN, big.NewInt(1)),
+			expected: "normalized",
+		},
+		{
+			name:     "s = n - 1 (max high-S, should normalize)",
+			s:        new(big.Int).Sub(n, big.NewInt(1)),
+			expected: "normalized",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			originalS := new(big.Int).Set(tc.s)
+			result := normalizeLowS(tc.s, n)
+
+			// Result should always be <= n/2
+			if result.Cmp(halfN) > 0 {
+				t.Errorf("result %s is greater than n/2", result.String())
+			}
+
+			// Check if it was normalized or unchanged
+			if tc.expected == "unchanged" {
+				if result.Cmp(originalS) != 0 {
+					t.Errorf("expected s to be unchanged, got %s", result.String())
+				}
+			} else {
+				expectedNormalized := new(big.Int).Sub(n, originalS)
+				if result.Cmp(expectedNormalized) != 0 {
+					t.Errorf("expected normalized s = %s, got %s", expectedNormalized.String(), result.String())
+				}
+			}
+		})
+	}
+}
+
+// TestIsLowS tests the IsLowS helper function.
+func TestIsLowS(t *testing.T) {
+	n := elliptic.P256().Params().N
+	halfN := new(big.Int).Rsh(n, 1)
+
+	// Create a signature with low-S
+	lowS := make([]byte, 64)
+	lowS[63] = 0x01 // r = 0, s = 1
+	if !IsLowS(lowS, n) {
+		t.Error("s=1 should be low-S")
+	}
+
+	// Create a signature with s = n/2 (boundary)
+	boundaryS := make([]byte, 64)
+	halfNBytes := halfN.Bytes()
+	copy(boundaryS[64-len(halfNBytes):], halfNBytes)
+	if !IsLowS(boundaryS, n) {
+		t.Error("s=n/2 should be low-S")
+	}
+
+	// Create a signature with high-S (s = n - 1)
+	highS := make([]byte, 64)
+	nMinus1 := new(big.Int).Sub(n, big.NewInt(1))
+	nMinus1Bytes := nMinus1.Bytes()
+	copy(highS[64-len(nMinus1Bytes):], nMinus1Bytes)
+	if IsLowS(highS, n) {
+		t.Error("s=n-1 should be high-S")
+	}
+
+	// Invalid signature length
+	if IsLowS([]byte{0x00}, n) {
+		t.Error("invalid length should return false")
+	}
+}
+
+// TestHighSSignatureRejection verifies that manually constructed high-S signatures
+// are correctly identified.
+func TestHighSSignatureRejection(t *testing.T) {
+	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
+	if err != nil {
+		t.Fatalf("GeneratePrivateKey failed: %v", err)
+	}
+
+	n := elliptic.P256().Params().N
+	message := []byte("test message for high-S detection")
+
+	// Get a valid low-S signature
+	sig, err := key.Sign(message)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+
+	// Verify it's low-S
+	if !IsLowS(sig, n) {
+		t.Fatal("fresh signature should be low-S")
+	}
+
+	// Create malleable high-S version: (r, n-s)
+	s := new(big.Int).SetBytes(sig[32:])
+	highS := new(big.Int).Sub(n, s)
+	highSSig := make([]byte, 64)
+	copy(highSSig[:32], sig[:32]) // same r
+	highSBytes := highS.Bytes()
+	copy(highSSig[64-len(highSBytes):], highSBytes)
+
+	// Verify high-S is detected
+	if IsLowS(highSSig, n) {
+		t.Error("malleable signature should be detected as high-S")
+	}
+
+	// Both signatures should verify (ECDSA allows both)
+	if !key.PublicKey().Verify(message, sig) {
+		t.Error("original signature should verify")
+	}
+	if !key.PublicKey().Verify(message, highSSig) {
+		t.Error("malleable signature should also verify (ECDSA allows both forms)")
+	}
 }
