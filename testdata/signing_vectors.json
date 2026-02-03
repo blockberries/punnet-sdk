@@ -1,0 +1,594 @@
+{
+  "version": "1.0",
+  "generated": "2026-02-03T06:01:02.768678Z",
+  "description": "Cross-implementation test vectors for Punnet SDK signing system",
+  "vectors": [
+    {
+      "name": "simple_send",
+      "description": "Simple single-message MsgSend transaction",
+      "category": "serialization",
+      "input": {
+        "chain_id": "punnet-mainnet-1",
+        "account": "alice",
+        "account_sequence": "42",
+        "nonce": "42",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "bob",
+              "amount": "1000000"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "5000"
+            }
+          ],
+          "gas_limit": "200000"
+        },
+        "fee_slippage": {
+          "numerator": "1",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"42\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000000\"}}],\"nonce\":\"42\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"}],\"gas_limit\":\"200000\"},\"fee_slippage\":{\"numerator\":\"1\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "378f48b3f6ef5113af38834bb3f7eafd0e894871aa500f9fde8f6083687af3b0",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "287ba33139bf793b280180c1c7c5b195269141e7ee01ea64a8b51105e9511a8819e10cd9ca6bfcefc1d8731f7498635bcaadaac38c0b22f8f6cad325a87b160f"
+          }
+        }
+      }
+    },
+    {
+      "name": "multi_message",
+      "description": "Transaction with multiple messages of different types",
+      "category": "serialization",
+      "input": {
+        "chain_id": "punnet-mainnet-1",
+        "account": "alice",
+        "account_sequence": "10",
+        "nonce": "10",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "bob",
+              "amount": "500000"
+            }
+          },
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "charlie",
+              "amount": "300000"
+            }
+          },
+          {
+            "type": "/punnet.staking.v1.MsgDelegate",
+            "data": {
+              "delegator": "alice",
+              "validator": "val1",
+              "amount": "200000"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "10000"
+            }
+          ],
+          "gas_limit": "500000"
+        },
+        "fee_slippage": {
+          "numerator": "5",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"10\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"500000\"}},{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"charlie\",\"amount\":\"300000\"}},{\"type\":\"/punnet.staking.v1.MsgDelegate\",\"data\":{\"delegator\":\"alice\",\"validator\":\"val1\",\"amount\":\"200000\"}}],\"nonce\":\"10\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"10000\"}],\"gas_limit\":\"500000\"},\"fee_slippage\":{\"numerator\":\"5\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "cbb866e380cd90887cf8e67dd5d81951ebdf86ca5fe8d3d09613b5336c27803a",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "6cd51e636181b41a70d1f34651be022a158990aa45811b3f721c67e874db3099211bb30aa450293a16a17402ebf368805c3e29de12ccbbc10a6aa117f8e5c100"
+          }
+        }
+      }
+    },
+    {
+      "name": "with_memo",
+      "description": "Transaction with a memo field",
+      "category": "serialization",
+      "input": {
+        "chain_id": "punnet-testnet-1",
+        "account": "sender",
+        "account_sequence": "100",
+        "nonce": "100",
+        "memo": "Payment for services rendered - Invoice #12345",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "sender",
+              "to": "recipient",
+              "amount": "1000000"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "uatom",
+              "amount": "2500"
+            }
+          ],
+          "gas_limit": "100000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-testnet-1\",\"account\":\"sender\",\"account_sequence\":\"100\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"sender\",\"to\":\"recipient\",\"amount\":\"1000000\"}}],\"nonce\":\"100\",\"memo\":\"Payment for services rendered - Invoice #12345\",\"fee\":{\"amount\":[{\"denom\":\"uatom\",\"amount\":\"2500\"}],\"gas_limit\":\"100000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "08f56796bb707e526d6cf554465d3cc56335053cacaf50e5f29ffa7ed09fa081",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "bc068c078b14112573e4a0f044440c345eff680a77ef61b403f3ec9732f2d436af4895ac437d32e715241d1fa7216b38ee666d5a5a22e90577a13fceba985f01"
+          }
+        }
+      }
+    },
+    {
+      "name": "with_fees",
+      "description": "Transaction with significant gas limit and fee slippage",
+      "category": "serialization",
+      "input": {
+        "chain_id": "punnet-mainnet-1",
+        "account": "alice",
+        "account_sequence": "5",
+        "nonce": "5",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "bob",
+              "amount": "100"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "1000000"
+            }
+          ],
+          "gas_limit": "1000000"
+        },
+        "fee_slippage": {
+          "numerator": "10",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"5\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"5\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"1000000\"}],\"gas_limit\":\"1000000\"},\"fee_slippage\":{\"numerator\":\"10\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "bd725d5312dea0d21c8260ffe8eb3576f103219c54bbac2577ca64505c10cbdb",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "8bb877d94bce667f1575f10e7230b920b8f8c68a160a03b160409ee0c6671dba4f3764f3afb9b08a512f41cf77681a85945de0f0cebe0ce7e21619a45a42550e"
+          }
+        }
+      }
+    },
+    {
+      "name": "multiple_fee_coins",
+      "description": "Transaction with multiple fee coins",
+      "category": "serialization",
+      "input": {
+        "chain_id": "punnet-mainnet-1",
+        "account": "alice",
+        "account_sequence": "20",
+        "nonce": "20",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "bob",
+              "amount": "1000"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "5000"
+            },
+            {
+              "denom": "uatom",
+              "amount": "3000"
+            },
+            {
+              "denom": "token",
+              "amount": "1000"
+            }
+          ],
+          "gas_limit": "300000"
+        },
+        "fee_slippage": {
+          "numerator": "2",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"20\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"1000\"}}],\"nonce\":\"20\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"5000\"},{\"denom\":\"uatom\",\"amount\":\"3000\"},{\"denom\":\"token\",\"amount\":\"1000\"}],\"gas_limit\":\"300000\"},\"fee_slippage\":{\"numerator\":\"2\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "03e129e1b2d292389335a55dc2845a86ab1e2d5829b300a73d2dc5f7beb90c27",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "5f6c7a708c3869cca54170a1505b1424f15271074ed434d4e36ed3d754dc8abd6694ea297bba47df2c5a3293d2734d1e4d73649cc003c361912107496aa2dd04"
+          }
+        }
+      }
+    },
+    {
+      "name": "ed25519_key_derivation",
+      "description": "Ed25519 key derivation from deterministic seed: SHA-256(\"punnet-sdk-test-vector-seed-ed25519\")",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "key-derivation-test",
+        "account": "test",
+        "account_sequence": "0",
+        "nonce": "0",
+        "messages": [
+          {
+            "type": "/test.KeyDerivation",
+            "data": {}
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"key-derivation-test\",\"account\":\"test\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.KeyDerivation\",\"data\":{}}],\"nonce\":\"0\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "feed80fa5fc4b303473e0a665f87c21fc8dc6b98d6d18b2bd6bc72ae46b823df",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "c010736b4b2aebd2298fbb0b1852a3fe6ce4a2a6eca3ee2a441de2a8813a50a5b38fdfde34401b28a2f9488f559e1ecaf60703b421f1c85ad07fefca90c99a0e"
+          },
+          "ed25519_seed": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "ed25519_signing",
+      "description": "Ed25519 signature generation for a known message",
+      "category": "algorithm",
+      "input": {
+        "chain_id": "signing-test",
+        "account": "signer",
+        "account_sequence": "1",
+        "nonce": "1",
+        "memo": "Sign this message",
+        "messages": [
+          {
+            "type": "/test.SignMe",
+            "data": {
+              "content": "test data for signing"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"signing-test\",\"account\":\"signer\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.SignMe\",\"data\":{\"content\":\"test data for signing\"}}],\"nonce\":\"1\",\"memo\":\"Sign this message\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "0b0e4ed0b34db09ccda4cf49e1299b6750d49adb94fb1636e5265ff88b81e285",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "6c56939459a551a79b2c5788a209a76f83de883a56fed9999c6ffe7978ace140101b4c6324cd3b7cf55a912bbef50f6ad44fae379ea7ef9d4341f68592c7fe05"
+          }
+        }
+      }
+    },
+    {
+      "name": "empty_memo",
+      "description": "Transaction with explicitly empty memo field",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "punnet-mainnet-1",
+        "account": "alice",
+        "account_sequence": "1",
+        "nonce": "1",
+        "messages": [
+          {
+            "type": "/punnet.bank.v1.MsgSend",
+            "data": {
+              "from": "alice",
+              "to": "bob",
+              "amount": "100"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"punnet-mainnet-1\",\"account\":\"alice\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/punnet.bank.v1.MsgSend\",\"data\":{\"from\":\"alice\",\"to\":\"bob\",\"amount\":\"100\"}}],\"nonce\":\"1\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "585878aa3c52b8cf2b544a0376b8ce4cd4f0226b095b094466d0b642fc0153ba",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "cbe965411f1bc89a31bb523b2658b871b9b0a34efc3c4ed47b32ce4d71d9b63c51ec2d9e3a3fb761ec6ff8cafe3a0a82803a73d4e85d4d6bce50f2360d032503"
+          }
+        }
+      }
+    },
+    {
+      "name": "zero_values",
+      "description": "Transaction with zero values for sequence, nonce, amounts, and gas",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "zero-test",
+        "account": "zero",
+        "account_sequence": "0",
+        "nonce": "0",
+        "messages": [
+          {
+            "type": "/test.Zero",
+            "data": {
+              "value": "0"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "0"
+            }
+          ],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"zero-test\",\"account\":\"zero\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/test.Zero\",\"data\":{\"value\":\"0\"}}],\"nonce\":\"0\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"0\"}],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "65e14e916ac3cfdd2a84e7232d0bee6a2e43d550f6702cbdfaf709fdd926f235",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "1f48c6fe607025e720179c3d5170068f1e5de4c4db8dcd2b92e2a6da0f2367bfad4e6101f360a051905cedb8c9d20162b604adbede9c1c43fce21cc78d03410b"
+          }
+        }
+      }
+    },
+    {
+      "name": "large_numbers",
+      "description": "Transaction with maximum uint64 values (18446744073709551615)",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "large-numbers-test",
+        "account": "bignum",
+        "account_sequence": "18446744073709551615",
+        "nonce": "18446744073709551615",
+        "messages": [
+          {
+            "type": "/test.LargeNumber",
+            "data": {
+              "amount": "18446744073709551615"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "18446744073709551615"
+            }
+          ],
+          "gas_limit": "18446744073709551615"
+        },
+        "fee_slippage": {
+          "numerator": "18446744073709551615",
+          "denominator": "18446744073709551615"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"large-numbers-test\",\"account\":\"bignum\",\"account_sequence\":\"18446744073709551615\",\"messages\":[{\"type\":\"/test.LargeNumber\",\"data\":{\"amount\":\"18446744073709551615\"}}],\"nonce\":\"18446744073709551615\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"18446744073709551615\"}],\"gas_limit\":\"18446744073709551615\"},\"fee_slippage\":{\"numerator\":\"18446744073709551615\",\"denominator\":\"18446744073709551615\"}}",
+        "sign_bytes_hex": "7b8e74f05dd72cc25410d75a4464a4dd9c039ef77ea7c6178e48e558f10b6cbe",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "e6bd0050edb27e5b7d386448e69dbcd32d3ede151c1c4bf433b5b6a77d8403265044931fa82ee1088aa547828e57f05d807a5aa8202c14ccb06fe302cb580e0c"
+          }
+        }
+      }
+    },
+    {
+      "name": "unicode_memo",
+      "description": "Transaction with Unicode characters in memo and message data",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "unicode-test",
+        "account": "unicode",
+        "account_sequence": "1",
+        "nonce": "1",
+        "memo": "Hello 世界! Привет мир! مرحبا بالعالم 🌍🚀",
+        "messages": [
+          {
+            "type": "/test.Unicode",
+            "data": {
+              "greeting": "こんにちは",
+              "emoji": "👋"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "1",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"unicode-test\",\"account\":\"unicode\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.Unicode\",\"data\":{\"greeting\":\"こんにちは\",\"emoji\":\"👋\"}}],\"nonce\":\"1\",\"memo\":\"Hello 世界! Привет мир! مرحبا بالعالم 🌍🚀\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"1\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "276a10085c82b22520d95509e3201b23c630ee37ff451722e35cc6d1838c7530",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "55f280e73d043b024e542452af0667093e8d2acbbdb6d32c28f8356743d4fd1957d24e1b36b28677c264c3bafd4ff3256ace5d4a463564b415876c8f34827606"
+          }
+        }
+      }
+    },
+    {
+      "name": "special_chars",
+      "description": "Transaction with special characters (quotes, escapes, newlines, tabs)",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "special-chars-test",
+        "account": "special",
+        "account_sequence": "1",
+        "nonce": "1",
+        "memo": "Special chars: \"quotes\", 'apostrophe', \\backslash, /slash, tab:\tnewline:\nend",
+        "messages": [
+          {
+            "type": "/test.SpecialChars",
+            "data": {
+              "text": "line1\nline2\ttab",
+              "quoted": "\"value\""
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "1",
+          "denominator": "100"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"special-chars-test\",\"account\":\"special\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.SpecialChars\",\"data\":{\"text\":\"line1\\nline2\\ttab\",\"quoted\":\"\\\"value\\\"\"}}],\"nonce\":\"1\",\"memo\":\"Special chars: \\\"quotes\\\", 'apostrophe', \\\\backslash, /slash, tab:\\tnewline:\\nend\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"1\",\"denominator\":\"100\"}}",
+        "sign_bytes_hex": "d8f99dff354eaaa97074cedf0a264abe1dd61421f0822b048c1a65e777a7a5ba",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "ef868e4f3c271afc638997795ea9b96c1906300238a0a038178151b88de2462ec69327850d96263f52653958df8abe86ff1462eeef9379c1297115d9db6c5b07"
+          }
+        }
+      }
+    },
+    {
+      "name": "minimal",
+      "description": "Minimal valid transaction with shortest possible valid values",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "m",
+        "account": "a",
+        "account_sequence": "0",
+        "nonce": "0",
+        "messages": [
+          {
+            "type": "/m",
+            "data": {}
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"m\",\"account\":\"a\",\"account_sequence\":\"0\",\"messages\":[{\"type\":\"/m\",\"data\":{}}],\"nonce\":\"0\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "01a1182ddb65ad005da1419fb5bf01061a2ea876a884d179d9cf11913867767e",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "a6617e08d4d054f535a6f18481bc9556be5a38677033981747ebe454e98db8db94560855c0aada343e44eeac429df1f85ddbd7143e4571cc567e2a626db64008"
+          }
+        }
+      }
+    }
+  ]
+}
