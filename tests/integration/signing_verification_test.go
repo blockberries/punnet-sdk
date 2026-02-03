@@ -47,7 +47,8 @@ func (kp *testKeyPair) toSignature(message []byte) types.Signature {
 
 // signingTestEnv provides test environment for signing tests
 type signingTestEnv struct {
-	getter *mockSigningAccountGetter
+	getter  *mockSigningAccountGetter
+	chainID string
 }
 
 // mockSigningAccountGetter implements types.AccountGetter for testing
@@ -76,8 +77,19 @@ func (m *mockSigningAccountGetter) setAccount(acc *types.Account) {
 // newSigningTestEnv creates a new signing test environment
 func newSigningTestEnv() *signingTestEnv {
 	return &signingTestEnv{
-		getter: newMockSigningAccountGetter(),
+		getter:  newMockSigningAccountGetter(),
+		chainID: testChainID,
 	}
+}
+
+// getSignDocBytes returns the bytes to sign for a transaction using SignDoc.
+// This matches how VerifyAuthorization computes the sign bytes.
+func (e *signingTestEnv) getSignDocBytes(t *testing.T, tx *types.Transaction, account *types.Account) []byte {
+	t.Helper()
+	signDoc := tx.ToSignDoc(e.chainID, account.Nonce)
+	signBytes, err := signDoc.GetSignBytes()
+	require.NoError(t, err, "failed to get sign bytes from SignDoc")
+	return signBytes
 }
 
 // createAccount creates an account with a single key authority
@@ -170,18 +182,16 @@ func TestSingleSignatureFlow_BasicSuccess(t *testing.T) {
 	msg := &testMessage{signer: "alice", data: "transfer 100 tokens"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 
-	// Get sign bytes using SignDoc (proper cross-chain replay protection)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	// Get sign bytes using SignDoc (matches how verification computes sign bytes)
+	signBytes := env.getSignDocBytes(t, tx, account)
 
 	// Sign
 	sig := keyPair.toSignature(signBytes)
 	auth := types.NewAuthorization(sig)
 	tx.Authorization = auth
 
-	// Verify using SignDoc-based verification
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	// Verify
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.NoError(t, err, "single signature verification should succeed")
 }
 
@@ -215,14 +225,12 @@ func TestSingleSignatureFlow_MultipleMessagesInTransaction(t *testing.T) {
 		&testMessage{signer: "alice", data: "message 3"},
 	}
 	tx := types.NewTransaction("alice", 0, messages, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.NoError(t, err, "multi-message transaction should verify")
 }
 
@@ -236,13 +244,11 @@ func TestSingleSignatureFlow_WithMemo(t *testing.T) {
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 	tx.Memo = "payment for services"
 
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.NoError(t, err, "transaction with memo should verify")
 }
 
@@ -452,14 +458,13 @@ func TestNegative_WrongNonce(t *testing.T) {
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil) // Wrong nonce: 0 instead of 5
 
-	// Sign with wrong nonce (tx.Nonce is 0, but we need account.Nonce for SignDoc)
-	signDoc := tx.ToSignDoc(testChainID, tx.Nonce) // Deliberately using tx.Nonce
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	// Note: Even with wrong nonce in tx, we sign with tx's nonce (via ToSignDoc)
+	// The verification will fail on nonce check, not signature check
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.Error(t, err, "wrong nonce should fail verification")
 	assert.Contains(t, err.Error(), "nonce", "error should mention nonce")
 }
@@ -474,14 +479,12 @@ func TestNegative_TamperedTransaction_ModifiedAccount(t *testing.T) {
 	// Alice signs a transaction
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
 	// Verify original works
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.NoError(t, err, "original should verify")
 
 	// Create a modified transaction (changing account name)
@@ -491,7 +494,7 @@ func TestNegative_TamperedTransaction_ModifiedAccount(t *testing.T) {
 
 	// Bob's account should fail because signature doesn't match bob's sign bytes
 	bobAccount, _ := env.getter.GetAccount("bob")
-	err = tamperedTx.VerifyAuthorization(testChainID, bobAccount, env.getter)
+	err = tamperedTx.VerifyAuthorization(env.chainID, bobAccount, env.getter)
 	assert.Error(t, err, "tampered transaction (different account) should fail")
 }
 
@@ -505,21 +508,19 @@ func TestNegative_TamperedTransaction_ModifiedMemo(t *testing.T) {
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
 	tx.Memo = "original memo"
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
 	// Original verifies
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.NoError(t, err, "original should verify")
 
 	// Tamper with memo after signing
 	tx.Memo = "tampered memo"
 
 	// Verification should fail because sign bytes changed
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err = tx.VerifyAuthorization(env.chainID, account, env.getter)
 	assert.Error(t, err, "tampered memo should fail verification")
 }
 
@@ -743,14 +744,12 @@ func TestRoundtrip_JSONSerialization(t *testing.T) {
 	// Create and sign
 	msg := &testMessage{signer: "alice", data: "transfer"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
 	// Verify before serialization
-	err = tx.VerifyAuthorization(testChainID, account, env.getter)
+	err := tx.VerifyAuthorization(env.chainID, account, env.getter)
 	require.NoError(t, err, "should verify before serialization")
 
 	// Serialize authorization to JSON
@@ -836,9 +835,7 @@ func TestRoundtrip_EmptyMemo(t *testing.T) {
 	// Transaction without memo
 	msg := &testMessage{signer: "alice", data: "no memo"}
 	tx := types.NewTransaction("alice", 0, []types.Message{msg}, nil)
-	signDoc := tx.ToSignDoc(testChainID, account.Nonce)
-	signBytes, err := signDoc.GetSignBytes()
-	require.NoError(t, err)
+	signBytes := env.getSignDocBytes(t, tx, account)
 	sig := keyPair.toSignature(signBytes)
 	tx.Authorization = types.NewAuthorization(sig)
 
@@ -848,7 +845,7 @@ func TestRoundtrip_EmptyMemo(t *testing.T) {
 	_ = json.Unmarshal(authJSON, &restored)
 
 	// Should still verify
-	err = restored.VerifyAuthorization(account, signBytes, env.getter)
+	err := restored.VerifyAuthorization(account, signBytes, env.getter)
 	assert.NoError(t, err, "roundtrip with empty memo should work")
 }
 

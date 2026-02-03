@@ -23,7 +23,157 @@ const (
 
 // forbiddenKeyNameChars contains characters not allowed in key names.
 // Prevents path traversal and filesystem issues.
-const forbiddenKeyNameChars = "/\\:*?\"<>|.."
+const forbiddenKeyNameChars = "/\\:*?\"<>|"
+
+// ============================================================================
+// SimpleKeyStore - used by Keyring subsystem (KeyEntry-based)
+// ============================================================================
+
+// SimpleKeyStore provides persistent storage for keys using KeyEntry.
+// This is a simpler interface used by the Keyring subsystem.
+// Implementations must be thread-safe.
+//
+// CORRECTNESS NOTE: The Keyring relies on SimpleKeyStore.Put with overwrite=false
+// being atomic with respect to existence checks. This is the linearization
+// point for key creation - concurrent Put calls for the same name must
+// result in exactly one success and all others returning ErrKeyExists.
+type SimpleKeyStore interface {
+	// Get retrieves a key entry by name.
+	// Returns ErrKeyNotFound if key doesn't exist.
+	// Complexity: Implementation dependent (O(1) for map, O(log n) for B-tree).
+	Get(name string) (*KeyEntry, error)
+
+	// Put stores a key entry.
+	// Returns ErrKeyExists if key already exists and overwrite is false.
+	// INVARIANT: Put with overwrite=false MUST be atomic with respect to
+	// existence check. This is the linearization point for key creation.
+	// Complexity: Implementation dependent.
+	Put(entry *KeyEntry, overwrite bool) error
+
+	// Delete removes a key entry.
+	// Returns ErrKeyNotFound if key doesn't exist.
+	// Complexity: Implementation dependent.
+	Delete(name string) error
+
+	// List returns all key names.
+	// Complexity: O(n) where n is number of keys.
+	// Memory: Allocates slice of strings.
+	List() ([]string, error)
+
+	// Has returns true if a key exists.
+	// More efficient than Get when you don't need the key data.
+	// Complexity: Implementation dependent (typically O(1) or O(log n)).
+	Has(name string) (bool, error)
+}
+
+// KeyEntry represents a stored key with metadata.
+// Used by SimpleKeyStore and Keyring subsystem.
+type KeyEntry struct {
+	// Name is the unique identifier for this key.
+	Name string `json:"name"`
+
+	// Algorithm is the key's signing algorithm.
+	Algorithm Algorithm `json:"algorithm"`
+
+	// PrivateKey is the encrypted or raw private key bytes.
+	// For encrypted storage, this contains the ciphertext.
+	PrivateKey []byte `json:"private_key"`
+
+	// PublicKey is the public key bytes.
+	PublicKey []byte `json:"public_key"`
+
+	// Encrypted indicates whether PrivateKey is encrypted.
+	Encrypted bool `json:"encrypted"`
+}
+
+// Clone creates a deep copy of the KeyEntry.
+// Prevents external mutation of stored keys.
+// Complexity: O(n) where n is total byte size.
+// Memory: Allocates new slices for all byte fields.
+func (e *KeyEntry) Clone() *KeyEntry {
+	if e == nil {
+		return nil
+	}
+	clone := &KeyEntry{
+		Name:      e.Name,
+		Algorithm: e.Algorithm,
+		Encrypted: e.Encrypted,
+	}
+	if e.PrivateKey != nil {
+		clone.PrivateKey = make([]byte, len(e.PrivateKey))
+		copy(clone.PrivateKey, e.PrivateKey)
+	}
+	if e.PublicKey != nil {
+		clone.PublicKey = make([]byte, len(e.PublicKey))
+		copy(clone.PublicKey, e.PublicKey)
+	}
+	return clone
+}
+
+// ============================================================================
+// EncryptedKeyStore - for encrypted key storage backends (EncryptedKey-based)
+// ============================================================================
+
+// EncryptedKeyStore is the interface for encrypted key storage backends.
+// Uses EncryptedKey with full encryption parameter support.
+//
+// Implementations must be safe for concurrent use by multiple goroutines.
+// All operations should be atomic - partial writes must not corrupt state.
+//
+// INVARIANT: For all stored keys k, ValidateKeyName(k.Name) == nil
+//
+// Performance characteristics vary by implementation:
+//   - MemoryKeyStore: O(1) average for all operations
+//   - FileKeyStore: O(1) memory ops + O(n) disk I/O where n = key size
+//   - EncryptedKeyStore: adds O(key_derivation) for password-based encryption
+type EncryptedKeyStore interface {
+	// Store saves a key to the store.
+	//
+	// REQUIREMENTS:
+	//   - name MUST be non-empty and pass ValidateKeyName()
+	//   - name MUST equal key.Name (prevents lookup/storage mismatch)
+	//   - key.Algorithm MUST be valid (pass Algorithm.IsValid())
+	//   - If key has encryption params, they MUST pass ValidateEncryptionParams()
+	//
+	// Returns ErrInvalidKeyName if name fails validation.
+	// Returns ErrKeyNameMismatch if name != key.Name.
+	// Returns ErrInvalidAlgorithm if algorithm is not recognized.
+	// Returns ErrInvalidEncryptionParams if encryption metadata is malformed.
+	// Returns ErrKeyStoreExists if a key with the same name already exists.
+	// Returns ErrKeyStoreIO if the underlying storage fails.
+	Store(name string, key EncryptedKey) error
+
+	// Load retrieves a key from the store.
+	// Returns ErrKeyStoreNotFound if no key exists with the given name.
+	// Returns ErrKeyStoreIO if the underlying storage fails.
+	//
+	// The returned EncryptedKey may contain encrypted or plaintext data
+	// depending on the storage backend configuration.
+	//
+	// SECURITY: Caller should call Wipe() on the returned key when done
+	// to zero sensitive data from memory.
+	Load(name string) (EncryptedKey, error)
+
+	// Delete removes a key from the store.
+	// Returns ErrKeyStoreNotFound if no key exists with the given name.
+	// Returns ErrKeyStoreIO if the underlying storage fails.
+	//
+	// SECURITY: Implementations MUST:
+	//   1. Zero all byte slices (PrivKeyData, Salt, Nonce) before removal
+	//   2. For file backends: overwrite file contents before deletion
+	//   3. Call any provided secure deletion facilities
+	//
+	// Note: Go's GC may retain copies of data. See EncryptedKey.Wipe() docs.
+	Delete(name string) error
+
+	// List returns all key names in the store.
+	// Returns an empty slice if no keys exist.
+	// Returns ErrKeyStoreIO if the underlying storage fails.
+	//
+	// The returned slice is not guaranteed to be in any particular order.
+	// Callers should not modify the returned slice.
+	List() ([]string, error)
+}
 
 // EncryptedKey represents a stored key that may be encrypted or plaintext.
 // For encrypted backends, PrivKeyData contains ciphertext encrypted with AES-GCM.
@@ -148,6 +298,10 @@ func (k *EncryptedKey) SafeString() string {
 	return "EncryptedKey{Name:" + k.Name + ", Algorithm:" + k.Algorithm.String() + ", Storage:" + encrypted + "}"
 }
 
+// ============================================================================
+// Key name validation
+// ============================================================================
+
 // ValidateKeyName checks that a key name is valid for storage.
 // Returns nil if valid, ErrInvalidKeyName if invalid.
 //
@@ -155,8 +309,9 @@ func (k *EncryptedKey) SafeString() string {
 //   - MUST be non-empty
 //   - MUST be valid UTF-8
 //   - MUST NOT exceed MaxKeyNameLength (256) bytes
-//   - MUST NOT contain path traversal characters (/, \, ..)
-//   - MUST NOT contain filesystem-unsafe characters (:, *, ?, ", <, >, |)
+//   - MUST NOT contain path traversal sequences (..)
+//   - MUST NOT contain filesystem-unsafe characters (:, *, ?, ", <, >, |, /, \)
+//   - MUST NOT contain control characters (< 32) or null bytes
 //
 // Complexity: O(n) where n = len(name)
 func ValidateKeyName(name string) error {
@@ -180,150 +335,16 @@ func ValidateKeyName(name string) error {
 		return ErrInvalidKeyName
 	}
 
-	// Check for forbidden characters
-	for _, c := range forbiddenKeyNameChars {
-		if strings.ContainsRune(name, c) {
+	// Check for control characters, null bytes, and forbidden characters.
+	// This prevents path traversal in file-based backends and filesystem issues.
+	for _, r := range name {
+		if r < 32 || r == 0 {
+			return ErrInvalidKeyName
+		}
+		if strings.ContainsRune(forbiddenKeyNameChars, r) {
 			return ErrInvalidKeyName
 		}
 	}
 
 	return nil
-}
-
-// KeyStore is the interface for key storage backends.
-//
-// Implementations must be safe for concurrent use by multiple goroutines.
-// All operations should be atomic - partial writes must not corrupt state.
-//
-// INVARIANT: For all stored keys k, ValidateKeyName(k.Name) == nil
-//
-// Performance characteristics vary by implementation:
-//   - MemoryKeyStore: O(1) average for all operations
-//   - FileKeyStore: O(1) memory ops + O(n) disk I/O where n = key size
-//   - EncryptedKeyStore: adds O(key_derivation) for password-based encryption
-type KeyStore interface {
-	// Store saves a key to the store.
-	//
-	// REQUIREMENTS:
-	//   - name MUST be non-empty and pass ValidateKeyName()
-	//   - name MUST equal key.Name (prevents lookup/storage mismatch)
-	//   - key.Algorithm MUST be valid (pass Algorithm.IsValid())
-	//   - If key has encryption params, they MUST pass ValidateEncryptionParams()
-	//
-	// Returns ErrInvalidKeyName if name fails validation.
-	// Returns ErrKeyNameMismatch if name != key.Name.
-	// Returns ErrInvalidAlgorithm if algorithm is not recognized.
-	// Returns ErrInvalidEncryptionParams if encryption metadata is malformed.
-	// Returns ErrKeyStoreExists if a key with the same name already exists.
-	// Returns ErrKeyStoreIO if the underlying storage fails.
-	Store(name string, key EncryptedKey) error
-
-	// Load retrieves a key from the store.
-	// Returns ErrKeyStoreNotFound if no key exists with the given name.
-	// Returns ErrKeyStoreIO if the underlying storage fails.
-	//
-	// The returned EncryptedKey may contain encrypted or plaintext data
-	// depending on the storage backend configuration.
-	//
-	// SECURITY: Caller should call Wipe() on the returned key when done
-	// to zero sensitive data from memory.
-	Load(name string) (EncryptedKey, error)
-
-	// Delete removes a key from the store.
-	// Returns ErrKeyStoreNotFound if no key exists with the given name.
-	// Returns ErrKeyStoreIO if the underlying storage fails.
-	//
-	// SECURITY: Implementations MUST:
-	//   1. Zero all byte slices (PrivKeyData, Salt, Nonce) before removal
-	//   2. For file backends: overwrite file contents before deletion
-	//   3. Call any provided secure deletion facilities
-	//
-	// Note: Go's GC may retain copies of data. See EncryptedKey.Wipe() docs.
-	Delete(name string) error
-
-	// List returns all key names in the store.
-	// Returns an empty slice if no keys exist.
-	// Returns ErrKeyStoreIO if the underlying storage fails.
-	//
-	// The returned slice is not guaranteed to be in any particular order.
-	// Callers should not modify the returned slice.
-	List() ([]string, error)
-}
-
-// ============================================================================
-// Simple KeyEntry-based storage (used by Keyring subsystem)
-// ============================================================================
-
-// SimpleKeyStore provides persistent storage for keys using KeyEntry.
-// This is a simpler interface used by the Keyring subsystem.
-// Implementations must be thread-safe.
-type SimpleKeyStore interface {
-	// Get retrieves a key entry by name.
-	// Returns ErrKeyNotFound if key doesn't exist.
-	// Complexity: Implementation dependent (O(1) for map, O(log n) for B-tree).
-	Get(name string) (*KeyEntry, error)
-
-	// Put stores a key entry.
-	// Returns ErrKeyExists if key already exists and overwrite is false.
-	// Complexity: Implementation dependent.
-	Put(entry *KeyEntry, overwrite bool) error
-
-	// Delete removes a key entry.
-	// Returns ErrKeyNotFound if key doesn't exist.
-	// Complexity: Implementation dependent.
-	Delete(name string) error
-
-	// List returns all key names.
-	// Complexity: O(n) where n is number of keys.
-	// Memory: Allocates slice of strings.
-	List() ([]string, error)
-
-	// Has returns true if a key exists.
-	// More efficient than Get when you don't need the key data.
-	// Complexity: Implementation dependent (typically O(1) or O(log n)).
-	Has(name string) (bool, error)
-}
-
-// KeyEntry represents a stored key with metadata.
-// Used by SimpleKeyStore and Keyring subsystem.
-type KeyEntry struct {
-	// Name is the unique identifier for this key.
-	Name string `json:"name"`
-
-	// Algorithm is the key's signing algorithm.
-	Algorithm Algorithm `json:"algorithm"`
-
-	// PrivateKey is the encrypted or raw private key bytes.
-	// For encrypted storage, this contains the ciphertext.
-	PrivateKey []byte `json:"private_key"`
-
-	// PublicKey is the public key bytes.
-	PublicKey []byte `json:"public_key"`
-
-	// Encrypted indicates whether PrivateKey is encrypted.
-	Encrypted bool `json:"encrypted"`
-}
-
-// Clone creates a deep copy of the KeyEntry.
-// Prevents external mutation of stored keys.
-// Complexity: O(n) where n is total byte size.
-// Memory: Allocates new slices for all byte fields.
-func (e *KeyEntry) Clone() *KeyEntry {
-	if e == nil {
-		return nil
-	}
-	clone := &KeyEntry{
-		Name:      e.Name,
-		Algorithm: e.Algorithm,
-		Encrypted: e.Encrypted,
-	}
-	if e.PrivateKey != nil {
-		clone.PrivateKey = make([]byte, len(e.PrivateKey))
-		copy(clone.PrivateKey, e.PrivateKey)
-	}
-	if e.PublicKey != nil {
-		clone.PublicKey = make([]byte, len(e.PublicKey))
-		copy(clone.PublicKey, e.PublicKey)
-	}
-	return clone
 }
