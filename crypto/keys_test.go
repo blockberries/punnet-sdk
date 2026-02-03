@@ -211,6 +211,25 @@ func TestPrivateKeyFromBytes_InvalidSize(t *testing.T) {
 	}
 }
 
+func TestPrivateKeyFromBytes_Secp256r1_InvalidScalar(t *testing.T) {
+	// Test zero scalar (d = 0 is invalid)
+	zeroScalar := make([]byte, 32)
+	_, err := PrivateKeyFromBytes(AlgorithmSecp256r1, zeroScalar)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "scalar out of range")
+
+	// Test scalar >= N (curve order)
+	// P-256 order N is 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+	// Using all 0xFF bytes is >= N
+	largeScalar := make([]byte, 32)
+	for i := range largeScalar {
+		largeScalar[i] = 0xFF
+	}
+	_, err = PrivateKeyFromBytes(AlgorithmSecp256r1, largeScalar)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "scalar out of range")
+}
+
 // ============================================================================
 // PublicKeyFromBytes Tests
 // ============================================================================
