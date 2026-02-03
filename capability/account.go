@@ -237,7 +237,7 @@ func (ac *accountCapability) GetNonce(ctx context.Context, name types.AccountNam
 }
 
 // IterateAccounts iterates over all accounts
-func (ac *accountCapability) IterateAccounts(ctx context.Context, callback func(*types.Account) error) error {
+func (ac *accountCapability) IterateAccounts(ctx context.Context, callback func(*types.Account) error) (err error) {
 	if ac == nil || ac.store == nil {
 		return ErrCapabilityNil
 	}
@@ -246,16 +246,20 @@ func (ac *accountCapability) IterateAccounts(ctx context.Context, callback func(
 		return fmt.Errorf("callback cannot be nil")
 	}
 
-	iter, err := ac.store.Iterator(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create iterator: %w", err)
+	iter, iterErr := ac.store.Iterator(ctx)
+	if iterErr != nil {
+		return fmt.Errorf("failed to create iterator: %w", iterErr)
 	}
-	defer iter.Close()
+	defer func() {
+		if closeErr := iter.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close iterator: %w", closeErr)
+		}
+	}()
 
 	for iter.Valid() {
-		account, err := iter.Value()
-		if err != nil {
-			return fmt.Errorf("failed to get value: %w", err)
+		account, valErr := iter.Value()
+		if valErr != nil {
+			return fmt.Errorf("failed to get value: %w", valErr)
 		}
 
 		if err := callback(account); err != nil {

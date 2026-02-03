@@ -14,7 +14,11 @@ func TestCachedObjectStore_GetSet(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -41,7 +45,11 @@ func TestCachedObjectStore_GetNotFound(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -55,7 +63,11 @@ func TestCachedObjectStore_Delete(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -78,7 +90,11 @@ func TestCachedObjectStore_Has(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -107,7 +123,11 @@ func TestCachedObjectStore_Flush(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -142,7 +162,11 @@ func TestCachedObjectStore_FlushDelete(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -150,11 +174,15 @@ func TestCachedObjectStore_FlushDelete(t *testing.T) {
 
 	// Set and flush
 	_ = store.Set(ctx, key, obj)
-	store.Flush(ctx)
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	// Delete and flush
 	_ = store.Delete(ctx, key)
-	store.Flush(ctx)
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	// Verify deleted from backing store
 	_, err := backing.Get(key)
@@ -167,7 +195,11 @@ func TestCachedObjectStore_CacheHit(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("key1")
@@ -175,7 +207,9 @@ func TestCachedObjectStore_CacheHit(t *testing.T) {
 
 	// Set and flush
 	_ = store.Set(ctx, key, obj)
-	store.Flush(ctx)
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	// Clear cache to force load from backing
 	store.cache.Clear()
@@ -201,7 +235,11 @@ func TestCachedObjectStore_GetBatch(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -243,7 +281,11 @@ func TestCachedObjectStore_SetBatch(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -274,7 +316,11 @@ func TestCachedObjectStore_DeleteBatch(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -304,7 +350,11 @@ func TestCachedObjectStore_Iterator(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -314,14 +364,20 @@ func TestCachedObjectStore_Iterator(t *testing.T) {
 		obj := testObject{ID: string(key), Data: "data"}
 		_ = store.Set(ctx, key, obj)
 	}
-	store.Flush(ctx)
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	// Iterate
 	iter, err := store.Iterator(ctx, nil, nil)
 	if err != nil {
 		t.Fatalf("Iterator failed: %v", err)
 	}
-	defer iter.Close()
+	t.Cleanup(func() {
+		if err := iter.Close(); err != nil {
+			t.Errorf("iterator Close failed: %v", err)
+		}
+	})
 
 	count := 0
 	for iter.Valid() {
@@ -342,7 +398,11 @@ func TestCachedObjectStore_ValidateKey(t *testing.T) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 100, 1000)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	obj := testObject{ID: "1", Data: "test"}
@@ -431,7 +491,11 @@ func BenchmarkCachedObjectStore_Set(b *testing.B) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 10000, 100000)
-	defer store.Close()
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	obj := testObject{ID: "bench", Data: "benchmark"}
@@ -447,7 +511,11 @@ func BenchmarkCachedObjectStore_Get_CacheHit(b *testing.B) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 10000, 100000)
-	defer store.Close()
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	key := []byte("benchmark-key")
@@ -464,7 +532,11 @@ func BenchmarkCachedObjectStore_Get_CacheMiss(b *testing.B) {
 	backing := NewMemoryStore()
 	serializer := NewJSONSerializer[testObject]()
 	store := NewCachedObjectStore(backing, serializer, 10000, 100000)
-	defer store.Close()
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 

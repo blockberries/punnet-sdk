@@ -10,7 +10,11 @@ import (
 func TestAccountStore_Basic(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	name := types.AccountName("alice")
@@ -36,7 +40,11 @@ func TestAccountStore_Basic(t *testing.T) {
 func TestAccountStore_GetNotFound(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -49,7 +57,11 @@ func TestAccountStore_GetNotFound(t *testing.T) {
 func TestAccountStore_Delete(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	name := types.AccountName("alice")
@@ -71,7 +83,11 @@ func TestAccountStore_Delete(t *testing.T) {
 func TestAccountStore_Has(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	name := types.AccountName("alice")
@@ -99,7 +115,11 @@ func TestAccountStore_Has(t *testing.T) {
 func TestAccountStore_GetBatch(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -130,7 +150,11 @@ func TestAccountStore_GetBatch(t *testing.T) {
 func TestAccountStore_SetBatch(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -160,7 +184,11 @@ func TestAccountStore_SetBatch(t *testing.T) {
 func TestAccountStore_InvalidAccount(t *testing.T) {
 	backing := NewMemoryStore()
 	as := NewAccountStore(backing)
-	defer as.Close()
+	t.Cleanup(func() {
+		if err := as.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -181,7 +209,11 @@ func TestAccountStore_InvalidAccount(t *testing.T) {
 func TestBalanceStore_Basic(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	account := types.AccountName("alice")
@@ -210,7 +242,11 @@ func TestBalanceStore_Basic(t *testing.T) {
 func TestBalanceStore_GetNotFound(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
@@ -228,7 +264,11 @@ func TestBalanceStore_GetNotFound(t *testing.T) {
 func TestBalanceStore_AddAmount(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	account := types.AccountName("alice")
@@ -260,7 +300,11 @@ func TestBalanceStore_AddAmount(t *testing.T) {
 func TestBalanceStore_SubAmount(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	account := types.AccountName("alice")
@@ -284,7 +328,11 @@ func TestBalanceStore_SubAmount(t *testing.T) {
 func TestBalanceStore_SubAmount_InsufficientFunds(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	account := types.AccountName("alice")
@@ -302,7 +350,11 @@ func TestBalanceStore_SubAmount_InsufficientFunds(t *testing.T) {
 func TestBalanceStore_Transfer(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	alice := types.AccountName("alice")
@@ -334,7 +386,11 @@ func TestBalanceStore_Transfer(t *testing.T) {
 func TestBalanceStore_GetAccountBalances(t *testing.T) {
 	backing := NewMemoryStore()
 	bs := NewBalanceStore(backing)
-	defer bs.Close()
+	t.Cleanup(func() {
+		if err := bs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	account := types.AccountName("alice")
@@ -345,7 +401,9 @@ func TestBalanceStore_GetAccountBalances(t *testing.T) {
 	_ = bs.Set(ctx, NewBalance(account, "token3", 0)) // Zero balance should not be included
 
 	// Flush to backing store for iteration
-	bs.Flush(ctx)
+	if err := bs.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	coins, err := bs.GetAccountBalances(ctx, account)
 	if err != nil {
@@ -360,7 +418,11 @@ func TestBalanceStore_GetAccountBalances(t *testing.T) {
 func TestValidatorStore_Basic(t *testing.T) {
 	backing := NewMemoryStore()
 	vs := NewValidatorStore(backing)
-	defer vs.Close()
+	t.Cleanup(func() {
+		if err := vs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	pubKey := []byte("validator-pubkey")
@@ -388,7 +450,11 @@ func TestValidatorStore_Basic(t *testing.T) {
 func TestValidatorStore_SetPower(t *testing.T) {
 	backing := NewMemoryStore()
 	vs := NewValidatorStore(backing)
-	defer vs.Close()
+	t.Cleanup(func() {
+		if err := vs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	pubKey := []byte("validator-pubkey")
@@ -412,7 +478,11 @@ func TestValidatorStore_SetPower(t *testing.T) {
 func TestValidatorStore_SetActive(t *testing.T) {
 	backing := NewMemoryStore()
 	vs := NewValidatorStore(backing)
-	defer vs.Close()
+	t.Cleanup(func() {
+		if err := vs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	pubKey := []byte("validator-pubkey")
@@ -436,20 +506,26 @@ func TestValidatorStore_SetActive(t *testing.T) {
 func TestValidatorStore_GetActiveValidators(t *testing.T) {
 	backing := NewMemoryStore()
 	vs := NewValidatorStore(backing)
-	defer vs.Close()
+	t.Cleanup(func() {
+		if err := vs.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 
 	// Add validators
 	_ = vs.Set(ctx, NewValidator([]byte("val1"), 100, "alice"))
-	_ = vs.Set(ctx, NewValidator([]byte("val2"), 0, "bob"))      // Zero power
+	_ = vs.Set(ctx, NewValidator([]byte("val2"), 0, "bob")) // Zero power
 	_ = vs.Set(ctx, NewValidator([]byte("val3"), 200, "charlie"))
 
 	// Deactivate one
 	_ = vs.SetActive(ctx, []byte("val1"), false)
 
 	// Flush for iteration
-	vs.Flush(ctx)
+	if err := vs.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
 
 	active, err := vs.GetActiveValidators(ctx)
 	if err != nil {
@@ -469,7 +545,11 @@ func TestValidatorStore_GetActiveValidators(t *testing.T) {
 func TestDelegationStore_Basic(t *testing.T) {
 	backing := NewMemoryStore()
 	ds := NewDelegationStore(backing)
-	defer ds.Close()
+	t.Cleanup(func() {
+		if err := ds.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	delegator := types.AccountName("alice")
@@ -498,7 +578,11 @@ func TestDelegationStore_Basic(t *testing.T) {
 func TestDelegationStore_Delete(t *testing.T) {
 	backing := NewMemoryStore()
 	ds := NewDelegationStore(backing)
-	defer ds.Close()
+	t.Cleanup(func() {
+		if err := ds.Close(); err != nil {
+			t.Errorf("Close failed: %v", err)
+		}
+	})
 
 	ctx := context.Background()
 	delegator := types.AccountName("alice")
