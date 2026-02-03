@@ -164,9 +164,11 @@ func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
 		}
 		return &ed25519PrivateKey{key: priv}, nil
 
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		// TODO: Implement secp256k1 and secp256r1 in issue #8
-		return nil, fmt.Errorf("algorithm %s not yet implemented", algo)
+	case AlgorithmSecp256k1:
+		return generateSecp256k1PrivateKey()
+
+	case AlgorithmSecp256r1:
+		return generateSecp256r1PrivateKey()
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
@@ -188,8 +190,11 @@ func PrivateKeyFromBytes(algo Algorithm, data []byte) (PrivateKey, error) {
 		copy(key, data)
 		return &ed25519PrivateKey{key: key}, nil
 
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		return nil, fmt.Errorf("algorithm %s not yet implemented", algo)
+	case AlgorithmSecp256k1:
+		return secp256k1PrivateKeyFromBytes(data)
+
+	case AlgorithmSecp256r1:
+		return secp256r1PrivateKeyFromBytes(data)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
@@ -210,8 +215,11 @@ func PublicKeyFromBytes(algo Algorithm, data []byte) (PublicKey, error) {
 		copy(key, data)
 		return &ed25519PublicKey{key: key}, nil
 
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		return nil, fmt.Errorf("algorithm %s not yet implemented", algo)
+	case AlgorithmSecp256k1:
+		return secp256k1PublicKeyFromBytes(data)
+
+	case AlgorithmSecp256r1:
+		return secp256r1PublicKeyFromBytes(data)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
