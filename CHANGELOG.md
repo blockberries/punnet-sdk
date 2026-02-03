@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `CachingKeyStore` read-through caching wrapper for `EncryptedKeyStore` backends (#138)
+  - LRU-based eviction with configurable cache capacity
+  - Write-through semantics for consistency
+  - Manual invalidation via `Invalidate()` and `InvalidateAll()`
+  - Cache hit/miss statistics via `Stats()` method
+  - ~182,000x speedup for cache hits vs FileKeyStore backend
+- Add test vectors for secp256k1 and secp256r1 algorithms (#67)
+  - Key derivation vectors from deterministic seed
+  - Signature generation vectors using RFC 6979 deterministic signatures
+  - Updated FORMAT.md with complete algorithm documentation
 - Add test vectors for nil vs empty value serialization (#66)
   - Test vectors for null/empty string memo handling
   - Test vectors for null/empty array fee amount handling
