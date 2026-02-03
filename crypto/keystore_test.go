@@ -125,7 +125,7 @@ func TestKeyStore_Load(t *testing.T) {
 		Algorithm:   AlgorithmSecp256k1,
 		PubKey:      []byte("pub"),
 		PrivKeyData: []byte("priv"),
-		Salt:        make([]byte, MinSaltLength),   // 16 bytes
+		Salt:        make([]byte, MinSaltLength),     // 16 bytes
 		Nonce:       make([]byte, AESGCMNonceLength), // 12 bytes
 	}
 	require.NoError(t, store.Store("test-key", original))
