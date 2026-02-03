@@ -31,10 +31,9 @@ func (k *secp256k1PublicKey) Algorithm() Algorithm {
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
 //
-// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
-// the signature (r, n-s) is also valid. This implementation does not enforce low-S
-// normalization. For consensus-critical applications where signature uniqueness matters,
-// consider canonicalizing signatures at the protocol layer.
+// Note: This verifies both low-S and high-S signatures. While Sign() produces
+// low-S signatures (BIP-62 compliant), Verify() accepts any valid signature.
+// Use IsLowS() if you need to reject high-S signatures at the protocol layer.
 func (k *secp256k1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
@@ -89,7 +88,11 @@ func (k *secp256k1PrivateKey) PublicKey() PublicKey {
 }
 
 // Sign signs the given data using RFC 6979 deterministic signatures.
-// Returns 64-byte signature: r||s in big-endian.
+// Returns 64-byte signature: r||s in big-endian with low-S normalization.
+//
+// Low-S normalization (BIP-62): The dcrd/secp256k1 library produces signatures
+// with s in the lower half of the curve order by default. This prevents signature
+// malleability attacks and matches Bitcoin's consensus rules.
 func (k *secp256k1PrivateKey) Sign(data []byte) ([]byte, error) {
 	hash := sha256.Sum256(data)
 	sig := dcrecdsa.Sign(k.key, hash[:])
@@ -130,10 +133,9 @@ func (k *secp256r1PublicKey) Algorithm() Algorithm {
 
 // Verify verifies a signature (64 bytes: r||s in big-endian).
 //
-// Note: ECDSA signatures have inherent malleability. For any valid signature (r, s),
-// the signature (r, n-s) is also valid. This implementation does not enforce low-S
-// normalization. For consensus-critical applications where signature uniqueness matters,
-// consider canonicalizing signatures at the protocol layer.
+// Note: This verifies both low-S and high-S signatures. While Sign() produces
+// low-S signatures (EIP-2 compliant), Verify() accepts any valid signature.
+// Use IsLowS() if you need to reject high-S signatures at the protocol layer.
 func (k *secp256r1PublicKey) Verify(data, signature []byte) bool {
 	if len(signature) != 64 {
 		return false
@@ -187,7 +189,7 @@ func (k *secp256r1PrivateKey) PublicKey() PublicKey {
 }
 
 // Sign signs the given data using RFC 6979 deterministic ECDSA.
-// Returns 64-byte signature: r||s in big-endian.
+// Returns 64-byte signature: r||s in big-endian with low-S normalization.
 //
 // RFC 6979 generates the nonce deterministically from the private key and message,
 // ensuring that signing the same message with the same key always produces identical
