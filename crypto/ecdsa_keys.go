@@ -188,28 +188,53 @@ func (k *secp256r1PrivateKey) PublicKey() PublicKey {
 	return &secp256r1PublicKey{key: &k.key.PublicKey}
 }
 
-// Sign signs the given data using Go's standard ECDSA signing.
+// Sign signs the given data using RFC 6979 deterministic ECDSA.
 // Returns 64-byte signature: r||s in big-endian with low-S normalization.
 //
-// Note: This uses rand.Reader for entropy, producing non-deterministic signatures.
-// Unlike secp256k1 (which uses RFC 6979), signing the same message twice may produce
-// different valid signatures. This is acceptable for most use cases but means
-// signatures cannot be used for deduplication or replay detection.
+// RFC 6979 generates the nonce deterministically from the private key and message,
+// ensuring that signing the same message with the same key always produces identical
+// signatures. This provides consistency with secp256k1 behavior and offers:
+//   - Reproducible signatures for debugging and testing
+//   - No entropy required at sign time
+//   - Protection against nonce reuse attacks from poor RNG
 //
 // Signatures are normalized to low-S form (s <= n/2) to prevent signature malleability.
 // This matches BIP-62 (Bitcoin) and EIP-2 (Ethereum) requirements.
+//
+// Complexity: O(n) where n is data length (for SHA-256 hash)
+// Memory: ~400 bytes for RFC 6979 HMAC state + 64-byte signature output
 func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
+	curve := k.key.Curve
+	n := curve.Params().N
+
+	// Hash the data
 	hash := sha256.Sum256(data)
 
-	r, s, err := ecdsa.Sign(rand.Reader, k.key, hash[:])
-	if err != nil {
-		return nil, fmt.Errorf("secp256r1 signing failed: %w", err)
+	// Generate deterministic nonce using RFC 6979
+	kNonce := rfc6979Nonce(k.key.D, hash[:], n)
+
+	// Compute r = (k*G).x mod n
+	rx, _ := curve.ScalarBaseMult(kNonce.Bytes())
+	r := new(big.Int).Mod(rx, n)
+	if r.Sign() == 0 {
+		return nil, fmt.Errorf("secp256r1 signing failed: r is zero")
+	}
+
+	// Compute s = k^-1 * (hash + r*d) mod n
+	kInv := new(big.Int).ModInverse(kNonce, n)
+	hashInt := new(big.Int).SetBytes(hash[:])
+	s := new(big.Int).Mul(r, k.key.D)
+	s.Add(s, hashInt)
+	s.Mul(s, kInv)
+	s.Mod(s, n)
+	if s.Sign() == 0 {
+		return nil, fmt.Errorf("secp256r1 signing failed: s is zero")
 	}
 
 	// Normalize s to low-S form to prevent signature malleability.
 	// For any valid signature (r, s), (r, n-s) is also valid.
 	// We enforce s <= n/2 to ensure canonical signatures.
-	s = normalizeLowS(s, k.key.Curve.Params().N)
+	s = normalizeLowS(s, n)
 
 	// Encode r and s as 32-byte big-endian values
 	signature := make([]byte, 64)
