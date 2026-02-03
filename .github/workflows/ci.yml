@@ -3,7 +3,7 @@
 # Main CI pipeline for punnet-sdk. Runs on every PR and push to main.
 #
 # Maintainer: The Glue
-# Last major update: 2024-01 (initial setup with benchmark regression detection)
+# Last major update: 2025-02 (updated Go 1.25, pinned golangci-lint v1.65.0)
 #
 # If this breaks at 2 AM, check:
 # 1. GitHub Actions status page
@@ -23,7 +23,10 @@ permissions:
   pull-requests: write
 
 env:
-  GO_VERSION: '1.23'
+  # Go version must match go.mod. golangci-lint version must be built with this Go version or higher.
+  GO_VERSION: '1.25'
+  # golangci-lint v1.65.0+ is built with Go 1.25. Using 'latest' can cause version mismatch errors.
+  GOLANGCI_LINT_VERSION: 'v1.65.0'
 
 jobs:
   test:
@@ -67,7 +70,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
 
   build:
     name: Build
