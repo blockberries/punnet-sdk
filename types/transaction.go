@@ -5,7 +5,35 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
+
+// Fee represents the transaction fee with gas limit and coin amounts.
+//
+// INVARIANT: GasLimit is a non-negative value.
+// INVARIANT: Amount contains valid coins (non-empty denoms, valid amounts).
+type Fee struct {
+	// Amount is the fee amount as a collection of coins.
+	Amount Coins `json:"amount"`
+
+	// GasLimit is the maximum gas allowed for this transaction.
+	GasLimit uint64 `json:"gas_limit"`
+}
+
+// Ratio represents a ratio with numerator and denominator.
+//
+// INVARIANT: Denominator MUST NOT be zero (division by zero is undefined).
+//
+// This is used for fee slippage tolerance, expressing the maximum acceptable
+// conversion rate deviation as a fraction.
+type Ratio struct {
+	// Numerator is the ratio numerator.
+	Numerator uint64 `json:"numerator"`
+
+	// Denominator is the ratio denominator.
+	// MUST NOT be zero.
+	Denominator uint64 `json:"denominator"`
+}
 
 // Transaction represents a signed transaction
 type Transaction struct {
@@ -23,6 +51,13 @@ type Transaction struct {
 
 	// Memo is an optional memo
 	Memo string `json:"memo,omitempty"`
+
+	// Fee is the transaction fee
+	Fee Fee `json:"fee"`
+
+	// FeeSlippage is the maximum conversion rate slippage tolerance for fee payment.
+	// Expressed as a ratio (e.g., {Numerator: 1, Denominator: 100} = 1% slippage).
+	FeeSlippage Ratio `json:"fee_slippage"`
 }
 
 // NewTransaction creates a new transaction
@@ -210,6 +245,9 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 // POSTCONDITION: Authorization field is NOT included (it contains the signatures being produced)
 //
 // INVARIANT: Two calls to ToSignDoc with same parameters return equal SignDocs.
+// PROOF SKETCH: All field conversions are pure functions of their inputs with no external
+// state dependency. Numeric conversions use strconv.FormatUint which is deterministic.
+// Message ordering is preserved (no sorting). Coin ordering in Fee.Amount is preserved.
 //
 // TODO(follow-up): The current message serialization only includes signers, not full message data.
 // This is architecturally problematic because:
@@ -225,20 +263,78 @@ func (tx *Transaction) VerifyAuthorization(chainID string, account *Account, get
 // And implement it on Message types or extract full message data.
 // See PR #25 review from Conductor for details.
 func (tx *Transaction) ToSignDoc(chainID string, accountSequence uint64) *SignDoc {
-	signDoc := NewSignDoc(chainID, accountSequence, string(tx.Account), tx.Nonce, tx.Memo)
-
-	// Convert messages to SignDoc format
-	for _, msg := range tx.Messages {
-		// TODO(follow-up): This only serializes signers. Full message content should be
-		// included for proper signature binding. The json.Marshal error is silently
-		// ignored here which is not ideal.
-		msgData, _ := json.Marshal(map[string]interface{}{
-			"signers": msg.GetSigners(),
-		})
-		signDoc.AddMessage(msg.Type(), msgData)
+	signDoc := &SignDoc{
+		Version:         SignDocVersion,
+		ChainID:         chainID,
+		Account:         string(tx.Account),
+		AccountSequence: StringUint64(accountSequence),
+		Messages:        convertMessages(tx.Messages),
+		Nonce:           StringUint64(tx.Nonce),
+		Memo:            tx.Memo,
+		Fee:             convertFee(tx.Fee),
+		FeeSlippage:     convertRatio(tx.FeeSlippage),
 	}
 
 	return signDoc
+}
+
+// convertMessages converts a slice of Message to SignDocMessage format.
+//
+// INVARIANT: Message ordering is preserved.
+// INVARIANT: Each message's Type() and GetSigners() are captured in the SignDocMessage.
+//
+// TODO(follow-up): This only serializes signers. Full message content should be
+// included for proper signature binding. The json.Marshal error is silently
+// ignored here which is not ideal.
+func convertMessages(msgs []Message) []SignDocMessage {
+	if msgs == nil {
+		return make([]SignDocMessage, 0)
+	}
+
+	result := make([]SignDocMessage, len(msgs))
+	for i, msg := range msgs {
+		// TODO(follow-up): This only serializes signers. Full message content should be
+		// included for proper signature binding.
+		msgData, _ := json.Marshal(map[string]interface{}{
+			"signers": msg.GetSigners(),
+		})
+		result[i] = SignDocMessage{
+			Type: msg.Type(),
+			Data: msgData,
+		}
+	}
+	return result
+}
+
+// convertFee converts a Fee to SignDocFee format.
+//
+// INVARIANT: Coin ordering in Amount is preserved.
+// INVARIANT: GasLimit is converted to decimal string representation.
+// INVARIANT: Each coin's Amount is converted to decimal string representation.
+func convertFee(fee Fee) SignDocFee {
+	coins := make([]SignDocCoin, len(fee.Amount))
+	for i, coin := range fee.Amount {
+		coins[i] = SignDocCoin{
+			Denom:  coin.Denom,
+			Amount: strconv.FormatUint(coin.Amount, 10),
+		}
+	}
+
+	return SignDocFee{
+		Amount:   coins,
+		GasLimit: strconv.FormatUint(fee.GasLimit, 10),
+	}
+}
+
+// convertRatio converts a Ratio to SignDocRatio format.
+//
+// INVARIANT: Numerator and Denominator are converted to decimal string representations.
+// ASSUMPTION: Caller ensures Denominator is not zero (validated elsewhere).
+func convertRatio(ratio Ratio) SignDocRatio {
+	return SignDocRatio{
+		Numerator:   strconv.FormatUint(ratio.Numerator, 10),
+		Denominator: strconv.FormatUint(ratio.Denominator, 10),
+	}
 }
 
 // ValidateSignDocRoundtrip validates that SignDoc serialization is deterministic.
