@@ -1,8 +1,12 @@
 package crypto
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -298,6 +302,343 @@ func TestFileKeyStore_ConcurrentAccess(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		<-done
 	}
+}
+
+// TestFileKeyStore_ConcurrentStoreLoad tests concurrent Store and Load operations.
+// This validates thread safety when multiple goroutines are simultaneously
+// writing new keys and reading existing keys.
+func TestFileKeyStore_ConcurrentStoreLoad(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	const numKeys = 20
+	const numReaders = 5
+	const readsPerReader = 50
+
+	// Pre-store some keys that readers will access
+	for i := 0; i < numKeys/2; i++ {
+		key := EncryptedKey{
+			Name:        fmt.Sprintf("preload-%d", i),
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte(fmt.Sprintf("pub-preload-%d", i)),
+			PrivKeyData: []byte(fmt.Sprintf("priv-preload-%d", i)),
+		}
+		err := ks.Store(key.Name, key)
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numKeys+numReaders*readsPerReader)
+
+	// Writers: store new keys concurrently
+	for i := numKeys / 2; i < numKeys; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			key := EncryptedKey{
+				Name:        fmt.Sprintf("concurrent-%d", idx),
+				Algorithm:   AlgorithmEd25519,
+				PubKey:      []byte(fmt.Sprintf("pub-%d", idx)),
+				PrivKeyData: []byte(fmt.Sprintf("priv-%d", idx)),
+			}
+			if err := ks.Store(key.Name, key); err != nil {
+				errors <- fmt.Errorf("store key %d failed: %w", idx, err)
+			}
+		}(i)
+	}
+
+	// Readers: load pre-existing keys concurrently with the writes
+	for r := 0; r < numReaders; r++ {
+		wg.Add(1)
+		go func(readerID int) {
+			defer wg.Done()
+			for j := 0; j < readsPerReader; j++ {
+				keyIdx := j % (numKeys / 2) // Only read preloaded keys
+				keyName := fmt.Sprintf("preload-%d", keyIdx)
+				loaded, err := ks.Load(keyName)
+				if err != nil {
+					errors <- fmt.Errorf("reader %d load %s failed: %w", readerID, keyName, err)
+					continue
+				}
+				// Verify the loaded data is correct
+				expectedPub := fmt.Sprintf("pub-preload-%d", keyIdx)
+				if string(loaded.PubKey) != expectedPub {
+					errors <- fmt.Errorf("reader %d: key %s has wrong pubkey: got %s, want %s",
+						readerID, keyName, loaded.PubKey, expectedPub)
+				}
+			}
+		}(r)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Collect and report all errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	require.Empty(t, errList, "concurrent store+load errors: %v", errList)
+
+	// Verify all keys were stored correctly
+	names, err := ks.List()
+	require.NoError(t, err)
+	assert.Len(t, names, numKeys)
+}
+
+// TestFileKeyStore_ConcurrentStoreDelete tests concurrent Store and Delete operations.
+// This validates thread safety when keys are being added and removed simultaneously.
+func TestFileKeyStore_ConcurrentStoreDelete(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	const numIterations = 50
+	const numDeleters = 3
+
+	// Pre-store keys that will be deleted
+	keysToDelete := make([]string, numIterations)
+	for i := 0; i < numIterations; i++ {
+		keyName := fmt.Sprintf("delete-me-%d", i)
+		keysToDelete[i] = keyName
+		key := EncryptedKey{
+			Name:        keyName,
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte(fmt.Sprintf("pub-delete-%d", i)),
+			PrivKeyData: []byte(fmt.Sprintf("priv-delete-%d", i)),
+		}
+		err := ks.Store(keyName, key)
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numIterations*2)
+	deleteIdx := int32(0)
+
+	// Writers: store new keys concurrently
+	for i := 0; i < numIterations; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			key := EncryptedKey{
+				Name:        fmt.Sprintf("new-key-%d", idx),
+				Algorithm:   AlgorithmSecp256k1,
+				PubKey:      []byte(fmt.Sprintf("pub-new-%d", idx)),
+				PrivKeyData: []byte(fmt.Sprintf("priv-new-%d", idx)),
+			}
+			if err := ks.Store(key.Name, key); err != nil {
+				errors <- fmt.Errorf("store new key %d failed: %w", idx, err)
+			}
+		}(i)
+	}
+
+	// Deleters: delete pre-existing keys concurrently with the writes
+	for d := 0; d < numDeleters; d++ {
+		wg.Add(1)
+		go func(deleterID int) {
+			defer wg.Done()
+			for {
+				idx := int(atomic.AddInt32(&deleteIdx, 1) - 1)
+				if idx >= numIterations {
+					return
+				}
+				keyName := keysToDelete[idx]
+				err := ks.Delete(keyName)
+				if err != nil && err != ErrKeyStoreNotFound {
+					// ErrKeyStoreNotFound is acceptable if another deleter got there first
+					errors <- fmt.Errorf("deleter %d delete %s failed: %w", deleterID, keyName, err)
+				}
+			}
+		}(d)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Collect and report all errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	require.Empty(t, errList, "concurrent store+delete errors: %v", errList)
+
+	// Verify: all new keys exist, all deleted keys are gone
+	names, err := ks.List()
+	require.NoError(t, err)
+
+	for _, name := range names {
+		assert.True(t, strings.HasPrefix(name, "new-key-"),
+			"unexpected key remaining: %s", name)
+	}
+	assert.Len(t, names, numIterations, "expected only new keys to remain")
+}
+
+// TestFileKeyStore_ConcurrentDeleteList tests concurrent Delete and List operations.
+// This validates thread safety when listing keys while deletions are happening.
+func TestFileKeyStore_ConcurrentDeleteList(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	const numKeys = 30
+	const numListers = 5
+	const listsPerLister = 20
+
+	// Pre-store keys
+	for i := 0; i < numKeys; i++ {
+		key := EncryptedKey{
+			Name:        fmt.Sprintf("list-key-%d", i),
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte(fmt.Sprintf("pub-%d", i)),
+			PrivKeyData: []byte(fmt.Sprintf("priv-%d", i)),
+		}
+		err := ks.Store(key.Name, key)
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numKeys+numListers*listsPerLister)
+	deleteIdx := int32(0)
+
+	// Deleters: delete keys one by one
+	for d := 0; d < 3; d++ {
+		wg.Add(1)
+		go func(deleterID int) {
+			defer wg.Done()
+			for {
+				idx := int(atomic.AddInt32(&deleteIdx, 1) - 1)
+				if idx >= numKeys {
+					return
+				}
+				keyName := fmt.Sprintf("list-key-%d", idx)
+				err := ks.Delete(keyName)
+				if err != nil && err != ErrKeyStoreNotFound {
+					errors <- fmt.Errorf("deleter %d delete %s failed: %w", deleterID, keyName, err)
+				}
+			}
+		}(d)
+	}
+
+	// Listers: list keys concurrently with deletions
+	for l := 0; l < numListers; l++ {
+		wg.Add(1)
+		go func(listerID int) {
+			defer wg.Done()
+			for j := 0; j < listsPerLister; j++ {
+				names, err := ks.List()
+				if err != nil {
+					errors <- fmt.Errorf("lister %d iteration %d failed: %w", listerID, j, err)
+					continue
+				}
+				// List should return a consistent snapshot (no duplicates, valid names)
+				seen := make(map[string]bool)
+				for _, name := range names {
+					if seen[name] {
+						errors <- fmt.Errorf("lister %d: duplicate key in list: %s", listerID, name)
+					}
+					seen[name] = true
+					if !strings.HasPrefix(name, "list-key-") {
+						errors <- fmt.Errorf("lister %d: unexpected key name: %s", listerID, name)
+					}
+				}
+			}
+		}(l)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Collect and report all errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	require.Empty(t, errList, "concurrent delete+list errors: %v", errList)
+
+	// Final state: all keys should be deleted
+	names, err := ks.List()
+	require.NoError(t, err)
+	assert.Empty(t, names, "all keys should have been deleted")
+}
+
+// TestFileKeyStore_ConcurrentMixedOperations performs a stress test with all
+// operations (Store, Load, Delete, List) running concurrently.
+// This is the most adversarial test for thread safety.
+func TestFileKeyStore_ConcurrentMixedOperations(t *testing.T) {
+	dir := t.TempDir()
+	ks, err := NewFileKeyStore(dir, "test-password")
+	require.NoError(t, err)
+
+	const numOps = 100
+	const numWorkers = 10
+
+	// Pre-store some keys for operations to work with
+	for i := 0; i < 10; i++ {
+		key := EncryptedKey{
+			Name:        fmt.Sprintf("mixed-init-%d", i),
+			Algorithm:   AlgorithmEd25519,
+			PubKey:      []byte(fmt.Sprintf("pub-%d", i)),
+			PrivKeyData: []byte(fmt.Sprintf("priv-%d", i)),
+		}
+		err := ks.Store(key.Name, key)
+		require.NoError(t, err)
+	}
+
+	var wg sync.WaitGroup
+	storeCount := int32(0)
+	errors := make(chan error, numWorkers*numOps)
+
+	// Mixed operation workers
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for i := 0; i < numOps; i++ {
+				op := i % 4
+				switch op {
+				case 0: // Store
+					idx := atomic.AddInt32(&storeCount, 1)
+					key := EncryptedKey{
+						Name:        fmt.Sprintf("mixed-new-%d", idx),
+						Algorithm:   AlgorithmEd25519,
+						PubKey:      []byte(fmt.Sprintf("pub-new-%d", idx)),
+						PrivKeyData: []byte(fmt.Sprintf("priv-new-%d", idx)),
+					}
+					if err := ks.Store(key.Name, key); err != nil && err != ErrKeyStoreExists {
+						errors <- fmt.Errorf("worker %d store failed: %w", workerID, err)
+					}
+				case 1: // Load (initial keys)
+					keyIdx := i % 10
+					keyName := fmt.Sprintf("mixed-init-%d", keyIdx)
+					if _, err := ks.Load(keyName); err != nil && err != ErrKeyStoreNotFound {
+						errors <- fmt.Errorf("worker %d load %s failed: %w", workerID, keyName, err)
+					}
+				case 2: // Delete (may race with other operations)
+					keyIdx := i % 10
+					keyName := fmt.Sprintf("mixed-init-%d", keyIdx)
+					if err := ks.Delete(keyName); err != nil && err != ErrKeyStoreNotFound {
+						// ErrKeyStoreNotFound is acceptable - another worker may have deleted it
+						errors <- fmt.Errorf("worker %d delete %s failed: %w", workerID, keyName, err)
+					}
+				case 3: // List
+					if _, err := ks.List(); err != nil {
+						errors <- fmt.Errorf("worker %d list failed: %w", workerID, err)
+					}
+				}
+			}
+		}(w)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Collect and report all errors
+	var errList []error
+	for err := range errors {
+		errList = append(errList, err)
+	}
+	require.Empty(t, errList, "concurrent mixed operations errors: %v", errList)
 }
 
 func TestFileKeyStore_AllAlgorithms(t *testing.T) {
