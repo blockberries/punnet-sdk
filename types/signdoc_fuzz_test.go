@@ -854,7 +854,7 @@ func FuzzConcurrentParseSignDocHighContention(f *testing.F) {
 			go func() {
 				defer wg.Done()
 				// Parse and discard result - we're testing for races, not correctness
-				ParseSignDoc(data)
+				_, _ = ParseSignDoc(data)
 			}()
 		}
 

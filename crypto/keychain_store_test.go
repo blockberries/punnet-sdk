@@ -2,7 +2,6 @@ package crypto
 
 import (
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -691,9 +690,3 @@ func TestKeychainStore_ServiceIsolation(t *testing.T) {
 	assert.Equal(t, []byte("pub2"), loaded2.PubKey)
 }
 
-// skipCI skips the test in CI environments (for slower keychain tests).
-func skipCI(t *testing.T) {
-	if os.Getenv("CI") != "" {
-		t.Skip("skipping slow test in CI")
-	}
-}

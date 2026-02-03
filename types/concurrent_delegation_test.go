@@ -137,13 +137,6 @@ func (m *concurrentMockAccountGetter) copyAccountUnsafe(acc *Account) *Account {
 	return accCopy
 }
 
-// copyAccount creates a deep copy with proper locking.
-func (m *concurrentMockAccountGetter) copyAccount(acc *Account) *Account {
-	// Note: This is called on an already-copied account from GetAccount,
-	// so we don't need the lock here. The account passed in is already
-	// a safe copy that's not in the shared map.
-	return m.copyAccountUnsafe(acc)
-}
 
 // =============================================================================
 // Scenario 1: Delegation Addition During Verification

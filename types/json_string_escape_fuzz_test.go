@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/blockberries/cramberry/pkg/cramberry"
@@ -668,7 +667,3 @@ func min(a, b int) int {
 	return b
 }
 
-// isControlChar returns true if the rune is a control character
-func isControlChar(r rune) bool {
-	return unicode.IsControl(r)
-}
