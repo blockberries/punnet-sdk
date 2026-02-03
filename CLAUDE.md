@@ -150,6 +150,7 @@ punnet-sdk/
 │   ├── message.go             # Message interface
 │   ├── authorization.go       # Authorization
 │   ├── coin.go                # Coin, Coins
+│   ├── deprecation.go         # Rate-limited deprecation logging
 │   └── effect.go              # Effect types
 │
 ├── traits/                    # Reusable traits
@@ -326,3 +327,24 @@ golangci-lint run
 - Ed25519 for identity and signing
 - SHA-256 for hashing
 - IAVL for state commitments and merkle proofs
+
+### SignDoc Security and Deprecation Logging
+Messages should implement `SignDocSerializable` to bind signatures to full message content. Messages that don't implement this interface fall back to signers-only mode, which is a security weakness.
+
+**Deprecation Logging**: The SDK logs rate-limited warnings when messages use the signers-only fallback. This helps identify messages that need migration to `SignDocSerializable`.
+
+```go
+// Example log output:
+// DEPRECATION WARNING: message does not implement SignDocSerializable, using signers-only fallback.
+// msg_type=/punnet.bank.v1.MsgSend security_note="signatures do not bind to full message content"
+```
+
+**Configuration**:
+- `SetDeprecationLoggingEnabled(bool)` - Enable/disable deprecation warnings
+- `SetDeprecationWarningInterval(duration)` - Set rate limit interval (default: 60s per message type)
+- `SetDeprecationLogger(*log.Logger)` - Use custom logger
+
+**Deprecation Timeline**:
+- v0.x: Warning logged when fallback is used (current)
+- v1.0: Consider making `SignDocSerializable` required
+- Future: Remove signers-only fallback entirely
