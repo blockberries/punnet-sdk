@@ -42,6 +42,46 @@ func (a Algorithm) IsValid() bool {
 	}
 }
 
+// KeySize returns the public key size in bytes for this algorithm.
+// Alias for PublicKeySize() for API compatibility.
+func (a Algorithm) KeySize() int {
+	return a.PublicKeySize()
+}
+
+// PublicKeySize returns the expected public key size in bytes.
+func (a Algorithm) PublicKeySize() int {
+	switch a {
+	case AlgorithmEd25519:
+		return 32
+	case AlgorithmSecp256k1, AlgorithmSecp256r1:
+		return 33 // Compressed form
+	default:
+		return 0
+	}
+}
+
+// PrivateKeySize returns the expected private key size in bytes.
+func (a Algorithm) PrivateKeySize() int {
+	switch a {
+	case AlgorithmEd25519:
+		return 64 // Ed25519 private key includes public key
+	case AlgorithmSecp256k1, AlgorithmSecp256r1:
+		return 32
+	default:
+		return 0
+	}
+}
+
+// SignatureSize returns the expected signature size in bytes.
+func (a Algorithm) SignatureSize() int {
+	switch a {
+	case AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1:
+		return 64
+	default:
+		return 0
+	}
+}
+
 // MarshalJSON implements json.Marshaler.
 func (a Algorithm) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(a))
@@ -59,28 +99,4 @@ func (a *Algorithm) UnmarshalJSON(data []byte) error {
 	}
 	*a = alg
 	return nil
-}
-
-// KeySize returns the public key size in bytes for this algorithm.
-func (a Algorithm) KeySize() int {
-	switch a {
-	case AlgorithmEd25519:
-		return 32
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		return 33 // compressed form
-	default:
-		return 0
-	}
-}
-
-// SignatureSize returns the signature size in bytes for this algorithm.
-func (a Algorithm) SignatureSize() int {
-	switch a {
-	case AlgorithmEd25519:
-		return 64
-	case AlgorithmSecp256k1, AlgorithmSecp256r1:
-		return 64
-	default:
-		return 0
-	}
 }
