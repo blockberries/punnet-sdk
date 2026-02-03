@@ -50,3 +50,40 @@ func (s *BasicSigner) PublicKey() PublicKey {
 func (s *BasicSigner) Algorithm() Algorithm {
 	return s.privateKey.Algorithm()
 }
+
+// SignBytesProvider is implemented by types that can provide bytes for signing.
+// This is used to avoid import cycles between crypto and types packages.
+type SignBytesProvider interface {
+	GetSignBytes() ([]byte, error)
+}
+
+// SignSignDoc signs a SignDoc (or any SignBytesProvider) using a PrivateKey.
+// Returns a Signature containing the public key, signature bytes, and algorithm.
+//
+// Complexity: O(n) where n is SignDoc serialized size.
+// Memory: 3 allocations (sign bytes, signature, Signature struct).
+//
+// Example:
+//
+//	sig, err := crypto.SignSignDoc(signDoc, privateKey)
+//	if err != nil {
+//	    return err
+//	}
+//	// sig.PubKey, sig.Signature, sig.Algorithm are populated
+func SignSignDoc(signDoc SignBytesProvider, privateKey PrivateKey) (*Signature, error) {
+	signBytes, err := signDoc.GetSignBytes()
+	if err != nil {
+		return nil, err
+	}
+
+	sig, err := privateKey.Sign(signBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Signature{
+		PubKey:    privateKey.PublicKey().Bytes(),
+		Signature: sig,
+		Algorithm: privateKey.Algorithm(),
+	}, nil
+}
