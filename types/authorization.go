@@ -407,7 +407,11 @@ func (a *Authorization) VerifyAuthorization(account *Account, message []byte, ge
 }
 
 // calculateWeight recursively calculates the total authorization weight
-// It implements cycle detection using DFS with a visited set
+// It implements cycle detection using DFS with a visited set.
+//
+// SECURITY: This function deduplicates signatures by public key to prevent
+// attackers from submitting multiple copies of the same signature to inflate
+// their authorization weight. See Issue #30.
 func (a *Authorization) calculateWeight(
 	accountName AccountName,
 	authority Authority,
@@ -435,10 +439,30 @@ func (a *Authorization) calculateWeight(
 
 	var totalWeight uint64
 
+	// SECURITY FIX (Issue #30): Track which public keys have already contributed weight.
+	// Without this, an attacker could submit multiple copies of the same signature
+	// to inflate their authorization weight and bypass multi-sig thresholds.
+	//
+	// Example attack: Account threshold=3, attacker has one key with weight=1
+	// Without fix: 3 copies of same signature → weight=3 → threshold met (ATTACK SUCCESS)
+	// With fix: 3 copies of same signature → only first counted → weight=1 < 3 (BLOCKED)
+	seenPubKeys := make(map[string]bool)
+
 	// Calculate weight from direct key signatures
 	for _, sig := range a.Signatures {
+		pubKeyStr := string(sig.PubKey)
+
+		// SECURITY: Check for duplicate signatures from same public key
+		if seenPubKeys[pubKeyStr] {
+			// Return error to make duplicate detection explicit
+			return 0, fmt.Errorf("%w: public key already provided a signature", ErrDuplicateSignature)
+		}
+
 		if authority.HasKey(sig.PubKey) {
 			if sig.Verify(message) {
+				// Mark this public key as having contributed
+				seenPubKeys[pubKeyStr] = true
+
 				keyWeight := authority.GetKeyWeight(sig.PubKey)
 				// Check for overflow
 				if totalWeight > ^uint64(0)-keyWeight {
