@@ -25,9 +25,6 @@ func BenchmarkKeyGenEd25519(b *testing.B) {
 	}
 }
 
-// NOTE: secp256k1 and secp256r1 are not yet implemented.
-// These benchmarks are provided as stubs for when they are implemented.
-
 func BenchmarkKeyGenSecp256k1(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -35,8 +32,7 @@ func BenchmarkKeyGenSecp256k1(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key, err := GeneratePrivateKey(AlgorithmSecp256k1)
 		if err != nil {
-			b.Skip("secp256k1 not yet implemented")
-			return
+			b.Fatal(err)
 		}
 		_ = key.PublicKey().Bytes()
 	}
@@ -49,8 +45,7 @@ func BenchmarkKeyGenSecp256r1(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		key, err := GeneratePrivateKey(AlgorithmSecp256r1)
 		if err != nil {
-			b.Skip("secp256r1 not yet implemented")
-			return
+			b.Fatal(err)
 		}
 		_ = key.PublicKey().Bytes()
 	}
@@ -127,8 +122,7 @@ func BenchmarkSignEd25519_1024Bytes(b *testing.B) {
 func BenchmarkSignSecp256k1_32Bytes(b *testing.B) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256k1)
 	if err != nil {
-		b.Skip("secp256k1 not yet implemented")
-		return
+		b.Fatal(err)
 	}
 	data := generateTestData(32)
 	b.ReportAllocs()
@@ -145,8 +139,7 @@ func BenchmarkSignSecp256k1_32Bytes(b *testing.B) {
 func BenchmarkSignSecp256r1_32Bytes(b *testing.B) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
 	if err != nil {
-		b.Skip("secp256r1 not yet implemented")
-		return
+		b.Fatal(err)
 	}
 	data := generateTestData(32)
 	b.ReportAllocs()
@@ -230,8 +223,7 @@ func BenchmarkVerifyEd25519_1024Bytes(b *testing.B) {
 func BenchmarkVerifySecp256k1_32Bytes(b *testing.B) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256k1)
 	if err != nil {
-		b.Skip("secp256k1 not yet implemented")
-		return
+		b.Fatal(err)
 	}
 	pubKey := key.PublicKey()
 	data := generateTestData(32)
@@ -252,8 +244,7 @@ func BenchmarkVerifySecp256k1_32Bytes(b *testing.B) {
 func BenchmarkVerifySecp256r1_32Bytes(b *testing.B) {
 	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
 	if err != nil {
-		b.Skip("secp256r1 not yet implemented")
-		return
+		b.Fatal(err)
 	}
 	pubKey := key.PublicKey()
 	data := generateTestData(32)
@@ -586,4 +577,426 @@ func BenchmarkSignSecp256r1WithLowS(b *testing.B) {
 func p256Order() *big.Int {
 	n, _ := new(big.Int).SetString("115792089210356248762697446949407573529996955224135760342422259061068512044369", 10)
 	return n
+}
+
+// ============================================================================
+// Algorithm Comparison Benchmarks (Issue #156)
+// ============================================================================
+// These benchmarks provide direct comparison of sign/verify/keygen throughput
+// across all supported algorithms, plus memory allocation analysis for
+// high-throughput scenarios (validators signing 1000s of attestations/sec).
+
+// BenchmarkSignThroughput compares signing throughput across algorithms.
+// This is the primary benchmark for comparing algorithm performance.
+//
+// Expected results (approximate, varies by hardware):
+// - Ed25519: ~50,000-70,000 ops/sec (fastest, uses native Go implementation)
+// - secp256k1: ~20,000-30,000 ops/sec (RFC 6979 deterministic nonce)
+// - secp256r1: ~15,000-25,000 ops/sec (RFC 6979 + manual low-S normalization)
+//
+// The secp256k1/r1 algorithms are slower due to:
+// 1. RFC 6979 HMAC-DRBG nonce generation (secp256k1 via dcrd, secp256r1 custom)
+// 2. Field arithmetic on 256-bit curve (vs Ed25519's optimized 255-bit ops)
+// 3. Low-S normalization for malleability protection
+func BenchmarkSignThroughput(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	data := []byte("benchmark message for signing throughput test")
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			key, err := GeneratePrivateKey(algo)
+			if err != nil {
+				b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := key.Sign(data)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkVerifyThroughput compares signature verification throughput.
+//
+// Verify operations are typically faster than sign operations because:
+// - No nonce generation required
+// - Single scalar multiplication (sign requires 2)
+//
+// Expected results (approximate):
+// - Ed25519: ~15,000-25,000 ops/sec
+// - secp256k1: ~20,000-40,000 ops/sec
+// - secp256r1: ~15,000-30,000 ops/sec
+func BenchmarkVerifyThroughput(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	data := []byte("benchmark message for verify throughput test")
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			key, err := GeneratePrivateKey(algo)
+			if err != nil {
+				b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+			}
+			pubKey := key.PublicKey()
+			sig, err := key.Sign(data)
+			if err != nil {
+				b.Fatalf("Sign(%s): %v", algo, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if !pubKey.Verify(data, sig) {
+					b.Fatal("verification failed")
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkKeyGenThroughput compares key generation performance.
+//
+// Key generation is typically the slowest operation because:
+// - Requires secure random number generation
+// - ECDSA requires point multiplication to derive public key
+//
+// Expected results (approximate):
+// - Ed25519: ~30,000-50,000 ops/sec (lightweight key derivation)
+// - secp256k1: ~15,000-30,000 ops/sec
+// - secp256r1: ~10,000-20,000 ops/sec
+func BenchmarkKeyGenThroughput(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				key, err := GeneratePrivateKey(algo)
+				if err != nil {
+					b.Fatal(err)
+				}
+				// Prevent optimization from eliminating the call
+				_ = key.PublicKey().Bytes()
+			}
+		})
+	}
+}
+
+// BenchmarkSignBatch simulates high-throughput signing scenarios.
+// This is relevant for validators signing multiple attestations per second.
+//
+// Measures: total time to sign N messages with the same key.
+// Batch sizes: 100, 1000, 10000 (typical validator workloads)
+func BenchmarkSignBatch(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	batchSizes := []int{100, 1000}
+
+	// Pre-generate unique messages
+	messages := make([][]byte, 1000)
+	for i := range messages {
+		messages[i] = []byte(fmt.Sprintf("attestation-%d", i))
+	}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+
+		for _, batchSize := range batchSizes {
+			b.Run(fmt.Sprintf("%s/batch_%d", algo, batchSize), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					for j := 0; j < batchSize; j++ {
+						_, err := key.Sign(messages[j%len(messages)])
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkVerifyBatch simulates high-throughput verification scenarios.
+// This is relevant for nodes verifying many signatures in gossip protocols.
+func BenchmarkVerifyBatch(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	batchSizes := []int{100, 1000}
+
+	// Pre-generate unique messages
+	messages := make([][]byte, 1000)
+	for i := range messages {
+		messages[i] = []byte(fmt.Sprintf("message-%d", i))
+	}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+		pubKey := key.PublicKey()
+
+		// Pre-sign all messages
+		signatures := make([][]byte, len(messages))
+		for i, msg := range messages {
+			sig, err := key.Sign(msg)
+			if err != nil {
+				b.Fatalf("Sign(%s): %v", algo, err)
+			}
+			signatures[i] = sig
+		}
+
+		for _, batchSize := range batchSizes {
+			b.Run(fmt.Sprintf("%s/batch_%d", algo, batchSize), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					for j := 0; j < batchSize; j++ {
+						if !pubKey.Verify(messages[j%len(messages)], signatures[j%len(signatures)]) {
+							b.Fatal("verification failed")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkSignMemoryPressure measures memory allocation patterns during
+// high-throughput signing. This helps identify GC pressure hotspots.
+//
+// Runs many sign operations and reports total allocations.
+// Ideal: minimal allocations per operation to reduce GC pauses.
+//
+// Expected allocations per sign:
+// - Ed25519: 1 alloc (64-byte signature slice)
+// - secp256k1: 1-2 allocs (signature + intermediate)
+// - secp256r1: 3-5 allocs (RFC 6979 state + big.Int operations)
+func BenchmarkSignMemoryPressure(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	data := []byte("memory pressure test message")
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			key, err := GeneratePrivateKey(algo)
+			if err != nil {
+				b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			// Run many iterations to accumulate allocation stats
+			for i := 0; i < b.N; i++ {
+				sig, err := key.Sign(data)
+				if err != nil {
+					b.Fatal(err)
+				}
+				// Prevent compiler from eliminating allocation
+				if len(sig) == 0 {
+					b.Fatal("empty signature")
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkVerifyMemoryPressure measures memory allocation patterns during
+// high-throughput verification.
+func BenchmarkVerifyMemoryPressure(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	data := []byte("memory pressure verify test")
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			key, err := GeneratePrivateKey(algo)
+			if err != nil {
+				b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+			}
+			pubKey := key.PublicKey()
+			sig, err := key.Sign(data)
+			if err != nil {
+				b.Fatalf("Sign(%s): %v", algo, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				result := pubKey.Verify(data, sig)
+				if !result {
+					b.Fatal("verification failed")
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkKeyGenMemoryPressure measures memory allocation patterns during
+// rapid key generation. Useful for identifying if key pooling would help.
+func BenchmarkKeyGenMemoryPressure(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		b.Run(algo.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				key, err := GeneratePrivateKey(algo)
+				if err != nil {
+					b.Fatal(err)
+				}
+				// Ensure key is fully materialized
+				pub := key.PublicKey()
+				if len(pub.Bytes()) == 0 {
+					b.Fatal("empty public key")
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkSignDataSizes compares signing performance across data sizes.
+// Shows how signing time scales with message length for each algorithm.
+//
+// Ed25519 hashes internally, so it scales with data size.
+// ECDSA pre-hashes to SHA256, so signing time is constant after hashing.
+func BenchmarkSignDataSizes(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	sizes := []int{32, 256, 1024, 4096}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+
+		for _, size := range sizes {
+			b.Run(fmt.Sprintf("%s/%d_bytes", algo, size), func(b *testing.B) {
+				data := generateTestData(size)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_, err := key.Sign(data)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkVerifyDataSizes compares verification across data sizes.
+func BenchmarkVerifyDataSizes(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	sizes := []int{32, 256, 1024, 4096}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+		pubKey := key.PublicKey()
+
+		for _, size := range sizes {
+			data := generateTestData(size)
+			sig, err := key.Sign(data)
+			if err != nil {
+				b.Fatalf("Sign(%s): %v", algo, err)
+			}
+
+			b.Run(fmt.Sprintf("%s/%d_bytes", algo, size), func(b *testing.B) {
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if !pubKey.Verify(data, sig) {
+						b.Fatal("verification failed")
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkPublicKeyFromBytes compares public key parsing performance.
+func BenchmarkPublicKeyFromBytes(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+		pubKeyBytes := key.PublicKey().Bytes()
+
+		b.Run(algo.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := PublicKeyFromBytes(algo, pubKeyBytes)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkPrivateKeyFromBytes compares private key parsing performance.
+func BenchmarkPrivateKeyFromBytes(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+		privKeyBytes := key.Bytes()
+
+		b.Run(algo.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, err := PrivateKeyFromBytes(algo, privKeyBytes)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkFullSignVerifyCycle measures the complete sign+verify operation.
+// This represents the full cost of securing and verifying a single message.
+func BenchmarkFullSignVerifyCycle(b *testing.B) {
+	algorithms := []Algorithm{AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1}
+	data := []byte("full sign-verify cycle benchmark")
+
+	for _, algo := range algorithms {
+		key, err := GeneratePrivateKey(algo)
+		if err != nil {
+			b.Fatalf("GeneratePrivateKey(%s): %v", algo, err)
+		}
+		pubKey := key.PublicKey()
+
+		b.Run(algo.String(), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				sig, err := key.Sign(data)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if !pubKey.Verify(data, sig) {
+					b.Fatal("verification failed")
+				}
+			}
+		})
+	}
 }
