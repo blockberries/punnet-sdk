@@ -1,0 +1,119 @@
+PASS
+ok  	github.com/blockberries/punnet-sdk/capability	0.177s
+PASS
+ok  	github.com/blockberries/punnet-sdk/crypto	0.127s
+PASS
+ok  	github.com/blockberries/punnet-sdk/effects	0.129s
+?   	github.com/blockberries/punnet-sdk/examples/minimal	[no test files]
+PASS
+ok  	github.com/blockberries/punnet-sdk/module	0.155s
+PASS
+ok  	github.com/blockberries/punnet-sdk/modules/auth	0.144s
+PASS
+ok  	github.com/blockberries/punnet-sdk/modules/bank	0.144s
+PASS
+ok  	github.com/blockberries/punnet-sdk/modules/staking	0.154s
+PASS
+ok  	github.com/blockberries/punnet-sdk/runtime	0.162s
+PASS
+ok  	github.com/blockberries/punnet-sdk/schema	0.114s
+goos: darwin
+goarch: arm64
+pkg: github.com/blockberries/punnet-sdk/store
+cpu: Apple M4 Pro
+BenchmarkCache_Set-12                          	51846584	        21.14 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Set-12                          	55051237	        21.81 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Set-12                          	54954175	        21.97 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Set-12                          	53681869	        22.40 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Set-12                          	55783897	        21.61 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Get-12                          	65694327	        18.79 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12                          	66331936	        18.36 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12                          	64624269	        18.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12                          	65452760	        18.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12                          	64109840	        18.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCache_Concurrent-12                   	12157042	       100.2 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Concurrent-12                   	12462493	       100.1 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Concurrent-12                   	12111144	       103.5 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Concurrent-12                   	11953262	       102.1 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCache_Concurrent-12                   	12203689	        96.76 ns/op	       4 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Set-12              	54710931	        22.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCachedObjectStore_Set-12              	53368732	        20.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCachedObjectStore_Set-12              	51086292	        22.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCachedObjectStore_Set-12              	52125940	        22.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCachedObjectStore_Set-12              	50363914	        22.01 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCachedObjectStore_Get_CacheHit-12     	47074592	        24.75 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheHit-12     	49085024	        24.54 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheHit-12     	49120016	        24.45 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheHit-12     	48804211	        24.52 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheHit-12     	48890292	        24.52 ns/op	      16 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheMiss-12    	43130042	        27.00 ns/op	       1 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheMiss-12    	41605269	        27.91 ns/op	       1 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheMiss-12    	44520637	        27.95 ns/op	       1 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheMiss-12    	42503076	        27.58 ns/op	       1 B/op	       1 allocs/op
+BenchmarkCachedObjectStore_Get_CacheMiss-12    	43990486	        28.80 ns/op	       1 B/op	       1 allocs/op
+BenchmarkIAVLStoreSet-12                       	 1000000	      1578 ns/op	    4309 B/op	      30 allocs/op
+BenchmarkIAVLStoreSet-12                       	 1000000	      1612 ns/op	    4309 B/op	      30 allocs/op
+BenchmarkIAVLStoreSet-12                       	 1000000	      1540 ns/op	    4309 B/op	      30 allocs/op
+BenchmarkIAVLStoreSet-12                       	 1000000	      1548 ns/op	    4309 B/op	      30 allocs/op
+BenchmarkIAVLStoreSet-12                       	 1000000	      1622 ns/op	    4309 B/op	      30 allocs/op
+BenchmarkIAVLStoreGet-12                       	38831074	        30.75 ns/op	      15 B/op	       1 allocs/op
+BenchmarkIAVLStoreGet-12                       	40360327	        30.52 ns/op	      15 B/op	       1 allocs/op
+BenchmarkIAVLStoreGet-12                       	41131868	        29.83 ns/op	      15 B/op	       1 allocs/op
+BenchmarkIAVLStoreGet-12                       	40732909	        29.86 ns/op	      15 B/op	       1 allocs/op
+BenchmarkIAVLStoreGet-12                       	41968436	        30.16 ns/op	      15 B/op	       1 allocs/op
+BenchmarkIAVLStoreSaveVersion-12               	     786	   1405465 ns/op	 7363929 B/op	     561 allocs/op
+BenchmarkIAVLStoreSaveVersion-12               	     796	   1363926 ns/op	 7363818 B/op	     560 allocs/op
+BenchmarkIAVLStoreSaveVersion-12               	     796	   1363889 ns/op	 7363890 B/op	     561 allocs/op
+BenchmarkIAVLStoreSaveVersion-12               	     818	   1347177 ns/op	 7363820 B/op	     561 allocs/op
+BenchmarkIAVLStoreSaveVersion-12               	     784	   1359116 ns/op	 7363868 B/op	     560 allocs/op
+BenchmarkMemoryStore_Set-12                    	38359287	        31.58 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemoryStore_Set-12                    	37892740	        31.79 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemoryStore_Set-12                    	38610918	        31.16 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemoryStore_Set-12                    	38434384	        31.24 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemoryStore_Set-12                    	37093850	        31.33 ns/op	      32 B/op	       2 allocs/op
+BenchmarkMemoryStore_Get-12                    	86623310	        14.12 ns/op	      16 B/op	       1 allocs/op
+BenchmarkMemoryStore_Get-12                    	86536118	        14.14 ns/op	      16 B/op	       1 allocs/op
+BenchmarkMemoryStore_Get-12                    	85982470	        13.80 ns/op	      16 B/op	       1 allocs/op
+BenchmarkMemoryStore_Get-12                    	88464853	        13.73 ns/op	      16 B/op	       1 allocs/op
+BenchmarkMemoryStore_Get-12                    	86619402	        13.77 ns/op	      16 B/op	       1 allocs/op
+BenchmarkMemoryStore_Concurrent-12             	22429382	        52.90 ns/op	       1 B/op	       1 allocs/op
+BenchmarkMemoryStore_Concurrent-12             	22900180	        51.46 ns/op	       1 B/op	       1 allocs/op
+BenchmarkMemoryStore_Concurrent-12             	22654171	        52.47 ns/op	       1 B/op	       1 allocs/op
+BenchmarkMemoryStore_Concurrent-12             	23374364	        53.21 ns/op	       1 B/op	       1 allocs/op
+BenchmarkMemoryStore_Concurrent-12             	23039096	        52.53 ns/op	       1 B/op	       1 allocs/op
+BenchmarkObjectPool_GetPut-12                  	166996435	         6.681 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_GetPut-12                  	168740623	         7.257 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_GetPut-12                  	166834252	         7.091 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_GetPut-12                  	169053242	         7.208 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_GetPut-12                  	167725892	         7.196 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_Concurrent-12              	1000000000	         0.8468 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_Concurrent-12              	1000000000	         0.8577 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_Concurrent-12              	1000000000	         0.8918 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_Concurrent-12              	1000000000	         1.025 ns/op	       0 B/op	       0 allocs/op
+BenchmarkObjectPool_Concurrent-12              	1000000000	         0.8047 ns/op	       0 B/op	       0 allocs/op
+BenchmarkBufferPool_GetPut-12                  	17670326	        67.74 ns/op	      24 B/op	       1 allocs/op
+BenchmarkBufferPool_GetPut-12                  	16276280	        68.92 ns/op	      24 B/op	       1 allocs/op
+BenchmarkBufferPool_GetPut-12                  	17139133	        69.24 ns/op	      24 B/op	       1 allocs/op
+BenchmarkBufferPool_GetPut-12                  	17498248	        69.97 ns/op	      24 B/op	       1 allocs/op
+BenchmarkBufferPool_GetPut-12                  	18166999	        69.09 ns/op	      24 B/op	       1 allocs/op
+BenchmarkKeyPool_CopyKey-12                    	65901476	        18.04 ns/op	      24 B/op	       1 allocs/op
+BenchmarkKeyPool_CopyKey-12                    	67656453	        17.82 ns/op	      24 B/op	       1 allocs/op
+BenchmarkKeyPool_CopyKey-12                    	69810394	        18.17 ns/op	      24 B/op	       1 allocs/op
+BenchmarkKeyPool_CopyKey-12                    	68275891	        17.67 ns/op	      24 B/op	       1 allocs/op
+BenchmarkKeyPool_CopyKey-12                    	63913216	        21.59 ns/op	      24 B/op	       1 allocs/op
+BenchmarkAllocation_WithoutPool-12             	1000000000	         0.2538 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithoutPool-12             	1000000000	         0.2542 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithoutPool-12             	1000000000	         0.2514 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithoutPool-12             	1000000000	         0.2519 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithoutPool-12             	1000000000	         0.2553 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithPool-12                	164160669	         7.263 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithPool-12                	163335093	         7.311 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithPool-12                	166662740	         7.260 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithPool-12                	168120244	         7.152 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAllocation_WithPool-12                	166237516	         7.226 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/blockberries/punnet-sdk/store	125.852s
+PASS
+ok  	github.com/blockberries/punnet-sdk/tests/integration	0.236s
+PASS
+ok  	github.com/blockberries/punnet-sdk/types	0.176s
