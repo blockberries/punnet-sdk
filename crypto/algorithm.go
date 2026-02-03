@@ -49,6 +49,7 @@ func (a Algorithm) KeySize() int {
 }
 
 // PublicKeySize returns the expected public key size in bytes.
+// Complexity: O(1)
 func (a Algorithm) PublicKeySize() int {
 	switch a {
 	case AlgorithmEd25519:
@@ -61,6 +62,7 @@ func (a Algorithm) PublicKeySize() int {
 }
 
 // PrivateKeySize returns the expected private key size in bytes.
+// Complexity: O(1)
 func (a Algorithm) PrivateKeySize() int {
 	switch a {
 	case AlgorithmEd25519:
@@ -73,6 +75,7 @@ func (a Algorithm) PrivateKeySize() int {
 }
 
 // SignatureSize returns the expected signature size in bytes.
+// Complexity: O(1)
 func (a Algorithm) SignatureSize() int {
 	switch a {
 	case AlgorithmEd25519, AlgorithmSecp256k1, AlgorithmSecp256r1:

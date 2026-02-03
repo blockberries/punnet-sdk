@@ -336,6 +336,7 @@ func TestContext_WithContext(t *testing.T) {
 	rctx, err := NewContext(ctx, header, account)
 	require.NoError(t, err)
 
+	// nolint:staticcheck // SA1029: using string key is acceptable for test purposes
 	newCtx := context.WithValue(ctx, "key", "value")
 	rctx2 := rctx.WithContext(newCtx)
 

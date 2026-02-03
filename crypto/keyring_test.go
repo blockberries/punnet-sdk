@@ -3,6 +3,7 @@ package crypto
 import (
 	"bytes"
 	"crypto/ed25519"
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -332,7 +333,7 @@ func BenchmarkKeyringNewKey(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		name := string(rune('a' + (i % 26)))
 		// Delete if exists to allow recreation
-		kr.DeleteKey(name)
+		_ = kr.DeleteKey(name)
 		_, _ = kr.NewKey(name, AlgorithmEd25519)
 	}
 }
@@ -340,7 +341,7 @@ func BenchmarkKeyringNewKey(b *testing.B) {
 func BenchmarkKeyringGetKeyCached(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -351,7 +352,7 @@ func BenchmarkKeyringGetKeyCached(b *testing.B) {
 func BenchmarkKeyringGetKeyUncached(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store, WithCacheSize(0)) // Disable cache
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -362,7 +363,7 @@ func BenchmarkKeyringGetKeyUncached(b *testing.B) {
 func BenchmarkKeyringSign(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 	data := []byte("benchmark signing data")
 
 	b.ResetTimer()
@@ -374,7 +375,7 @@ func BenchmarkKeyringSign(b *testing.B) {
 func BenchmarkKeyringSignParallel(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 	data := []byte("benchmark signing data")
 
 	b.ResetTimer()
@@ -391,7 +392,7 @@ func BenchmarkKeyringListKeys(b *testing.B) {
 
 	// Add 100 keys
 	for i := 0; i < 100; i++ {
-		kr.NewKey(string(rune('a'+i/26))+string(rune('a'+i%26)), AlgorithmEd25519)
+		_, _ = kr.NewKey(string(rune('a'+i/26))+string(rune('a'+i%26)), AlgorithmEd25519)
 	}
 
 	b.ResetTimer()
@@ -408,7 +409,7 @@ func BenchmarkMemoryStoreGet(b *testing.B) {
 		PrivateKey: make([]byte, 64),
 		PublicKey:  make([]byte, 32),
 	}
-	store.Put(entry, false)
+	_ = store.Put(entry, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -427,7 +428,7 @@ func BenchmarkMemoryStorePut(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		store.Put(entry, true) // Overwrite mode
+		_ = store.Put(entry, true) // Overwrite mode
 	}
 }
 
@@ -441,16 +442,16 @@ func TestKeyringKeyNameValidation(t *testing.T) {
 		name    string
 		wantErr bool
 	}{
-		{"", true},                           // empty
-		{"valid-key", false},                 // valid
-		{"key_with_underscore", false},       // valid
-		{"key.with.dots", false},             // valid
-		{"../etc/passwd", true},              // path traversal
-		{"..\\windows\\system32", true},      // windows path traversal
-		{"/absolute/path", true},             // absolute path
-		{"key\x00null", true},                // null byte
-		{"key\nwith\nnewlines", true},        // control chars
-		{string(make([]byte, 300)), true},    // too long
+		{"", true},                        // empty
+		{"valid-key", false},              // valid
+		{"key_with_underscore", false},    // valid
+		{"key.with.dots", false},          // valid
+		{"../etc/passwd", true},           // path traversal
+		{"..\\windows\\system32", true},   // windows path traversal
+		{"/absolute/path", true},          // absolute path
+		{"key\x00null", true},             // null byte
+		{"key\nwith\nnewlines", true},     // control chars
+		{string(make([]byte, 300)), true}, // too long
 	}
 
 	for _, tt := range tests {
@@ -460,7 +461,7 @@ func TestKeyringKeyNameValidation(t *testing.T) {
 		}
 		// Clean up if key was created
 		if err == nil {
-			kr.DeleteKey(tt.name)
+			_ = kr.DeleteKey(tt.name)
 		}
 	}
 }
@@ -563,11 +564,11 @@ func TestKeyringConcurrentDeleteGet(t *testing.T) {
 		name := string(rune('a' + (i % 10)))
 		go func(n string) {
 			defer wg.Done()
-			kr.GetKey(n) // May succeed or fail, shouldn't panic
+			_, _ = kr.GetKey(n) // May succeed or fail, shouldn't panic
 		}(name)
 		go func(n string) {
 			defer wg.Done()
-			kr.DeleteKey(n) // May succeed or fail, shouldn't panic
+			_ = kr.DeleteKey(n) // May succeed or fail, shouldn't panic
 		}(name)
 	}
 	wg.Wait()
@@ -623,6 +624,77 @@ func TestZeroize(t *testing.T) {
 	// Empty slice should not panic
 	Zeroize(nil)
 	Zeroize([]byte{})
+}
+
+func TestZeroize_VariousSizes(t *testing.T) {
+	// Test various sizes to ensure XORBytes handles them correctly
+	sizes := []int{1, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 512, 1024}
+
+	for _, size := range sizes {
+		t.Run(fmt.Sprintf("Size_%d", size), func(t *testing.T) {
+			data := make([]byte, size)
+			// Fill with non-zero pattern
+			for i := range data {
+				data[i] = byte(i+1) | 0x80 // Ensure high bit set
+			}
+
+			Zeroize(data)
+
+			for i, b := range data {
+				if b != 0 {
+					t.Errorf("Zeroize failed at index %d for size %d: got %d, want 0", i, size, b)
+				}
+			}
+		})
+	}
+}
+
+func TestZeroize_AllOnes(t *testing.T) {
+	// Test with all 0xFF bytes (worst case for XOR-based zeroing)
+	data := make([]byte, 64)
+	for i := range data {
+		data[i] = 0xFF
+	}
+
+	Zeroize(data)
+
+	for i, b := range data {
+		if b != 0 {
+			t.Errorf("Zeroize failed at index %d: got %d, want 0", i, b)
+		}
+	}
+}
+
+func TestZeroize_AlreadyZero(t *testing.T) {
+	// Zeroing already-zero data should be a no-op (but not cause issues)
+	data := make([]byte, 64) // Already zero
+	Zeroize(data)
+
+	for i, b := range data {
+		if b != 0 {
+			t.Errorf("Zeroize corrupted zero data at index %d: got %d", i, b)
+		}
+	}
+}
+
+func TestZeroize_PreservesLength(t *testing.T) {
+	// Verify zeroing doesn't affect slice metadata
+	original := make([]byte, 100, 200)
+	for i := range original {
+		original[i] = byte(i)
+	}
+
+	lenBefore := len(original)
+	capBefore := cap(original)
+
+	Zeroize(original)
+
+	if len(original) != lenBefore {
+		t.Errorf("Zeroize changed length: got %d, want %d", len(original), lenBefore)
+	}
+	if cap(original) != capBefore {
+		t.Errorf("Zeroize changed capacity: got %d, want %d", cap(original), capBefore)
+	}
 }
 
 func TestPrivateKeyZeroize(t *testing.T) {

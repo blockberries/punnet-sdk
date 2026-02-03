@@ -225,9 +225,9 @@ func TestParallelExecution_NoRaceConditions(t *testing.T) {
 	}
 
 	// Initialize some balances
-	balanceStore.SetBalance("alice", "uatom", 1000)
-	balanceStore.SetBalance("bob", "uatom", 1000)
-	balanceStore.SetBalance("charlie", "uatom", 1000)
+	_ = balanceStore.SetBalance("alice", "uatom", 1000)
+	_ = balanceStore.SetBalance("bob", "uatom", 1000)
+	_ = balanceStore.SetBalance("charlie", "uatom", 1000)
 
 	// Create many independent transfer effects
 	effects := make([]Effect, 100)
@@ -236,8 +236,8 @@ func TestParallelExecution_NoRaceConditions(t *testing.T) {
 		to := types.AccountName(fmt.Sprintf("account%d", (i+1)%10))
 
 		// Initialize accounts if needed
-		balanceStore.SetBalance(from, "uatom", 100)
-		balanceStore.SetBalance(to, "uatom", 100)
+		_ = balanceStore.SetBalance(from, "uatom", 100)
+		_ = balanceStore.SetBalance(to, "uatom", 100)
 
 		effects[i] = TransferEffect{
 			From:   from,

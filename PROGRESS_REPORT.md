@@ -2660,7 +2660,7 @@ Transaction message (optimized for size):
 
 ### Current State
 - All types use JSON serialization
-- Transaction.GetSignBytes() uses SHA-256 hash
+- SignDoc.GetSignBytes() uses SHA-256 hash (canonical approach with chainID)
 - Store serializers use JSONSerializer
 - No deterministic guarantees
 
@@ -2676,8 +2676,8 @@ Transaction message (optimized for size):
    - Handle time.Time → int64 conversion
    - Handle map[AccountName]uint64 → map[string]uint64
 
-3. **Update Transaction**
-   - Replace GetSignBytes() with Cramberry marshaling
+3. **Update SignDoc**
+   - Replace SignDoc.GetSignBytes() with Cramberry marshaling
    - Replace Hash() with deterministic encoding
    - Add backward compatibility period
 
@@ -2700,7 +2700,7 @@ Transaction message (optimized for size):
 ### Critical Migration Points
 
 Must use Cramberry for consensus:
-- Transaction.GetSignBytes() - signature verification
+- SignDoc.GetSignBytes() - signature verification (canonical, includes chainID)
 - Transaction.Hash() - transaction identification  
 - Store serialization - state commitment
 - Message encoding - transaction messages
