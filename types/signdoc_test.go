@@ -192,6 +192,56 @@ func TestSignDoc_ValidateBasic(t *testing.T) {
 			expectErr: true,
 			errMsg:    "data too large",
 		},
+		{
+			name: "non-compact JSON - whitespace outside strings (security)",
+			signDoc: &SignDoc{
+				Version: SignDocVersion,
+				ChainID: "test",
+				Account: "alice",
+				Messages: []SignDocMessage{{
+					Type: "/msg.Type",
+					// JSON with whitespace - this would cause signature mismatch
+					Data: json.RawMessage(`{ "key" : "value" }`),
+				}},
+				Fee:         SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+				FeeSlippage: SignDocRatio{Numerator: "0", Denominator: "1"},
+			},
+			expectErr: true,
+			errMsg:    "not compact JSON",
+		},
+		{
+			name: "non-compact JSON - newlines (security)",
+			signDoc: &SignDoc{
+				Version: SignDocVersion,
+				ChainID: "test",
+				Account: "alice",
+				Messages: []SignDocMessage{{
+					Type: "/msg.Type",
+					// Pretty-printed JSON - common issue when loading from files
+					Data: json.RawMessage("{\n  \"key\": \"value\"\n}"),
+				}},
+				Fee:         SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+				FeeSlippage: SignDocRatio{Numerator: "0", Denominator: "1"},
+			},
+			expectErr: true,
+			errMsg:    "not compact JSON",
+		},
+		{
+			name: "compact JSON with whitespace inside strings (valid)",
+			signDoc: &SignDoc{
+				Version: SignDocVersion,
+				ChainID: "test",
+				Account: "alice",
+				Messages: []SignDocMessage{{
+					Type: "/msg.Type",
+					// Whitespace inside string values is fine
+					Data: json.RawMessage(`{"key":"value with spaces"}`),
+				}},
+				Fee:         SignDocFee{Amount: []SignDocCoin{}, GasLimit: "0"},
+				FeeSlippage: SignDocRatio{Numerator: "0", Denominator: "1"},
+			},
+			expectErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -718,6 +768,89 @@ func TestSignDoc_ValidateBasic_WithFee(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestIsCompactJSON(t *testing.T) {
+	// SECURITY: This function is critical for ensuring msg.Data doesn't contain
+	// whitespace that could cause signature mismatches.
+	tests := []struct {
+		name     string
+		input    []byte
+		expected bool
+	}{
+		{
+			name:     "empty input",
+			input:    []byte{},
+			expected: true,
+		},
+		{
+			name:     "compact object",
+			input:    []byte(`{"key":"value"}`),
+			expected: true,
+		},
+		{
+			name:     "compact array",
+			input:    []byte(`["a","b","c"]`),
+			expected: true,
+		},
+		{
+			name:     "compact nested",
+			input:    []byte(`{"key":{"nested":"value"},"arr":[1,2,3]}`),
+			expected: true,
+		},
+		{
+			name:     "whitespace inside string is fine",
+			input:    []byte(`{"key":"value with spaces and\ttabs and\nnewlines"}`),
+			expected: true,
+		},
+		{
+			name:     "escaped quotes in string",
+			input:    []byte(`{"key":"value with \"quotes\""}`),
+			expected: true,
+		},
+		{
+			name:     "space outside string",
+			input:    []byte(`{ "key":"value"}`),
+			expected: false,
+		},
+		{
+			name:     "space after colon",
+			input:    []byte(`{"key": "value"}`),
+			expected: false,
+		},
+		{
+			name:     "newline in object",
+			input:    []byte("{\n\"key\":\"value\"}"),
+			expected: false,
+		},
+		{
+			name:     "tab character",
+			input:    []byte("{\t\"key\":\"value\"}"),
+			expected: false,
+		},
+		{
+			name:     "carriage return",
+			input:    []byte("{\r\"key\":\"value\"}"),
+			expected: false,
+		},
+		{
+			name:     "pretty printed JSON",
+			input:    []byte("{\n  \"key\": \"value\"\n}"),
+			expected: false,
+		},
+		{
+			name:     "space in array",
+			input:    []byte(`[1, 2, 3]`),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isCompactJSON(tt.input)
+			assert.Equal(t, tt.expected, result, "isCompactJSON mismatch for: %s", string(tt.input))
 		})
 	}
 }

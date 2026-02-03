@@ -198,6 +198,54 @@ func TestSignDocFieldValues_UnicodeStrings(t *testing.T) {
 	}
 }
 
+func TestSignDocFieldValues_UnicodeNormalizationBehavior(t *testing.T) {
+	// SECURITY DOCUMENTATION TEST:
+	// This test explicitly documents the behavior that Unicode normalization is NOT performed.
+	// Two visually identical strings with different Unicode representations produce different signatures.
+	// Applications should normalize user input to NFC before creating SignDocs.
+
+	// "café" can be represented two ways:
+	// NFC (composed):   c a f é       (4 characters, é = U+00E9)
+	// NFD (decomposed): c a f e ́      (5 characters, é = e U+0065 + ́ U+0301)
+	nfcCafe := "caf\u00e9"         // composed é
+	nfdCafe := "cafe\u0301"        // e + combining acute accent
+
+	// Visually identical but different byte sequences
+	require.NotEqual(t, nfcCafe, nfdCafe, "NFC and NFD should be different strings")
+
+	sdNFC := NewSignDoc("chain", 1, "alice", 1, nfcCafe)
+	sdNFC.AddMessage("/msg", json.RawMessage(`{}`))
+
+	sdNFD := NewSignDoc("chain", 1, "alice", 1, nfdCafe)
+	sdNFD.AddMessage("/msg", json.RawMessage(`{}`))
+
+	jsonNFC, err := sdNFC.ToJSON()
+	require.NoError(t, err)
+
+	jsonNFD, err := sdNFD.ToJSON()
+	require.NoError(t, err)
+
+	// CRITICAL: These produce DIFFERENT JSON bytes (and thus different signatures)
+	// This is expected and documented behavior.
+	assert.NotEqual(t, jsonNFC, jsonNFD,
+		"NFC and NFD representations SHOULD produce different JSON (no normalization)")
+
+	// Verify both roundtrip correctly
+	parsedNFC, err := ParseSignDoc(jsonNFC)
+	require.NoError(t, err)
+	assert.Equal(t, nfcCafe, parsedNFC.Memo)
+
+	parsedNFD, err := ParseSignDoc(jsonNFD)
+	require.NoError(t, err)
+	assert.Equal(t, nfdCafe, parsedNFD.Memo)
+
+	// Document: GetSignBytes() also differs
+	hashNFC, _ := sdNFC.GetSignBytes()
+	hashNFD, _ := sdNFD.GetSignBytes()
+	assert.NotEqual(t, hashNFC, hashNFD,
+		"sign bytes should differ for NFC vs NFD")
+}
+
 func TestSignDocFieldValues_SpecialCharactersInMemo(t *testing.T) {
 	// Special characters that need JSON escaping must be handled correctly.
 	testCases := []struct {

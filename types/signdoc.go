@@ -233,6 +233,14 @@ func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 // - cramberry.EscapeJSONString for safe string escaping with proper Unicode handling
 // - Field order follows struct declaration order for reproducibility
 // - No reliance on map iteration (which is non-deterministic in Go)
+//
+// KNOWN LIMITATION (Unicode Normalization):
+// This implementation does NOT perform Unicode normalization (NFC/NFD).
+// Two strings that appear identical visually but differ in Unicode representation
+// (e.g., "café" composed U+00E9 vs decomposed U+0065+U+0301) will produce different
+// JSON bytes and thus different signatures. Applications that accept user input
+// should normalize strings to NFC before creating SignDocs to ensure consistent
+// behavior across implementations.
 func (sd *SignDoc) ToJSON() ([]byte, error) {
 	var b strings.Builder
 
@@ -285,12 +293,13 @@ func (sd *SignDoc) writeMessagesJSON(b *strings.Builder) error {
 		b.WriteString(cramberry.EscapeJSONString(msg.Type))
 		b.WriteString(`,"data":`)
 		// SECURITY: msg.Data is written directly without re-canonicalization.
-		// INVARIANT (caller responsibility): msg.Data MUST contain canonical JSON.
-		// If msg.Data contains non-canonical JSON (e.g., {"b":1,"a":2} instead of
-		// {"a":2,"b":1}), two semantically identical messages could produce different
-		// signatures. This is by design - re-canonicalization would add overhead and
-		// the message data typically comes from our own serialization code.
-		// See: https://github.com/blockberries/punnet-sdk/issues/96
+		// This is safe because ValidateBasic() ensures msg.Data is compact JSON (no whitespace).
+		//
+		// NOTE: Key ordering is NOT validated - msg.Data with {"b":1,"a":2} vs {"a":2,"b":1}
+		// will produce different signatures. This is acceptable because:
+		// 1. Message data typically comes from our own serialization code which is consistent
+		// 2. Re-canonicalization would add significant overhead for large messages
+		// 3. ValidateBasic() catches the most common issue (pretty-printed JSON from files)
 		if msg.Data == nil {
 			b.WriteString(`null`)
 		} else {
@@ -335,6 +344,50 @@ func (r *SignDocRatio) writeJSON(b *strings.Builder) {
 // INVARIANT: Same input always produces identical output.
 func EncodeBase64(data []byte) string {
 	return cramberry.EncodeBase64(data)
+}
+
+// isCompactJSON checks if JSON bytes contain no unnecessary whitespace.
+// This is a security check to ensure msg.Data is in canonical form.
+//
+// SECURITY: Non-compact JSON in message data can lead to signature mismatches
+// across implementations that may canonicalize differently.
+//
+// Returns true if the JSON is compact (no whitespace outside of strings),
+// false if there are spaces, tabs, or newlines outside of quoted strings.
+func isCompactJSON(data []byte) bool {
+	if len(data) == 0 {
+		return true
+	}
+
+	inString := false
+	escape := false
+
+	for _, b := range data {
+		if escape {
+			escape = false
+			continue
+		}
+
+		if inString {
+			if b == '\\' {
+				escape = true
+			} else if b == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		// Not in a string
+		switch b {
+		case '"':
+			inString = true
+		case ' ', '\t', '\n', '\r':
+			// Whitespace outside of a string - not compact
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetSignBytes returns the bytes that should be signed.
@@ -394,6 +447,15 @@ func (sd *SignDoc) ValidateBasic() error {
 		if len(msg.Data) > MaxMessageDataSize {
 			return fmt.Errorf("%w: message %d data too large (%d > %d)",
 				ErrSignDocMismatch, i, len(msg.Data), MaxMessageDataSize)
+		}
+
+		// SECURITY: Validate message data is compact JSON to ensure deterministic signing.
+		// Non-compact JSON (with whitespace outside strings) can cause signature mismatches
+		// across implementations. This catches the most common canonicalization issues.
+		// NOTE: This does NOT validate key ordering - that remains the caller's responsibility.
+		if !isCompactJSON(msg.Data) {
+			return fmt.Errorf("%w: message %d data is not compact JSON (contains whitespace outside strings)",
+				ErrSignDocMismatch, i)
 		}
 	}
 
