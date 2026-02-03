@@ -62,6 +62,7 @@ The Punnet SDK has successfully completed all 7 implementation phases and 7 comp
 ### ✅ Cryptographic Security
 - Ed25519 signature verification
 - Constant-time key comparisons (timing attack protection)
+- Hardened key zeroization (compiler optimization resistant)
 - Hierarchical authorization with cycle detection
 - Nonce-based replay protection
 

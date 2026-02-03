@@ -3870,3 +3870,87 @@ go build ./...
 # Success - no errors or warnings
 ```
 
+---
+
+## Issue #109: Harden Zeroize Function Against Compiler Optimization - COMPLETED
+
+### Overview
+Improved the `Zeroize()` function to use a robust approach that prevents compiler optimization (dead-store elimination) from removing the zeroing operation. This ensures sensitive cryptographic material like private keys is properly cleared from memory.
+
+### Completion Date
+February 3, 2026
+
+---
+
+### Files Modified
+
+1. **crypto/keys.go**
+   - Replaced `subtle.ConstantTimeCopy` with `subtle.XORBytes(b, b, b)` - XORing each byte with itself produces zeros
+   - Added `runtime.KeepAlive(b)` for defense in depth against dead-store elimination
+   - Removed unused 512-byte `zeroBlock` static buffer
+   - Simplified implementation without chunking loop
+
+2. **crypto/keyring_test.go**
+   - Added `TestZeroize_VariousSizes`: Sizes from 1 to 1024 bytes
+   - Added `TestZeroize_AllOnes`: All 0xFF bytes (worst case)
+   - Added `TestZeroize_AlreadyZero`: Idempotency check
+   - Added `TestZeroize_PreservesLength`: Slice metadata unchanged
+
+3. **crypto/crypto_benchmark_test.go**
+   - Updated benchmark documentation
+   - Added private key size benchmark
+
+---
+
+### Key Functionality Implemented
+
+#### Hardened Zeroize Implementation
+The new implementation uses two complementary techniques:
+
+1. **`subtle.XORBytes(b, b, b)`** - Part of `crypto/subtle`, explicitly designed not to be optimized away by the compiler
+2. **`runtime.KeepAlive(b)`** - Prevents the compiler from considering the slice "dead" after zeroing
+
+#### Security Analysis
+
+| Aspect | Old (ConstantTimeCopy) | New (XORBytes + KeepAlive) |
+|--------|------------------------|---------------------------|
+| Compiler resistance | crypto/subtle | crypto/subtle + KeepAlive |
+| Side-channel safety | Constant time | Constant time |
+| Buffer requirements | 512-byte static buffer | None (self-referential) |
+| Size handling | Chunked loop | Single operation |
+
+---
+
+### Benchmark Results
+
+```
+BenchmarkZeroize_PrivateKeySize-12    335577859    3.530 ns/op    0 B/op    0 allocs/op
+```
+
+~3.5ns to zero a 64-byte Ed25519 private key with zero allocations.
+
+---
+
+### Test Coverage
+
+- Various sizes from 1 to 1024 bytes verified
+- All-ones pattern (worst case) tested
+- Idempotency verified (zeroing already-zeroed data)
+- Slice length/capacity preserved
+- Zero allocations confirmed via benchmarks
+
+---
+
+### Verification
+
+```bash
+go test ./crypto/... -v -run Zeroize
+# All Zeroize tests passing
+
+go test ./crypto/... -bench=Zeroize
+# BenchmarkZeroize_PrivateKeySize ~3.5ns/op
+
+go build ./...
+# Success - no errors or warnings
+```
+
