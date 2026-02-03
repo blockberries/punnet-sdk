@@ -90,8 +90,8 @@ func (m *mockKeyStore) List() ([]string, error) {
 	return names, nil
 }
 
-// Verify mockKeyStore implements KeyStore interface.
-var _ KeyStore = (*mockKeyStore)(nil)
+// Verify mockKeyStore implements EncryptedKeyStore interface.
+var _ EncryptedKeyStore = (*mockKeyStore)(nil)
 
 func TestKeyStore_Store(t *testing.T) {
 	store := newMockKeyStore()

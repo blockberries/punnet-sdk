@@ -666,7 +666,7 @@ func XTestBalanceCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			cap.AddBalance(ctx, "alice", "uatom", 10)
+			_ = cap.AddBalance(ctx, "alice", "uatom", 10) // May succeed or fail, testing concurrency safety
 		}()
 	}
 
@@ -674,7 +674,7 @@ func XTestBalanceCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			cap.SubBalance(ctx, "alice", "uatom", 5)
+			_ = cap.SubBalance(ctx, "alice", "uatom", 5) // May succeed or fail, testing concurrency safety
 		}()
 	}
 
@@ -682,7 +682,7 @@ func XTestBalanceCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			cap.GetBalance(ctx, "alice", "uatom")
+			_, _ = cap.GetBalance(ctx, "alice", "uatom") // May succeed or fail, testing concurrency safety
 		}()
 	}
 

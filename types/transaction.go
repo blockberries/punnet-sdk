@@ -35,6 +35,48 @@ type Ratio struct {
 	Denominator uint64 `json:"denominator"`
 }
 
+// ValidateBasic performs stateless validation of Fee.
+//
+// INVARIANT: All coins in Amount MUST be valid (non-empty denom, denom <= 64 chars).
+// INVARIANT: Number of fee coins MUST NOT exceed MaxFeeCoins.
+//
+// SECURITY: This validation prevents malformed fees from entering the gossip layer.
+// Downstream components (e.g., ToSignDoc, fee deduction) assume valid fee structure.
+func (f *Fee) ValidateBasic() error {
+	// SECURITY: Limit number of fee coins to prevent DoS via iteration
+	if len(f.Amount) > MaxFeeCoins {
+		return fmt.Errorf("too many fee coins (%d > %d)", len(f.Amount), MaxFeeCoins)
+	}
+
+	// Validate each coin
+	for i, coin := range f.Amount {
+		if !coin.IsValid() {
+			return fmt.Errorf("fee coin %d: invalid (empty or oversized denom)", i)
+		}
+	}
+
+	return nil
+}
+
+// ValidateBasic performs stateless validation of Ratio.
+//
+// PRECONDITION: None (called on any Ratio value).
+// POSTCONDITION: If nil returned, Denominator is guaranteed non-zero.
+//
+// INVARIANT: Denominator MUST NOT be zero.
+// PROOF SKETCH: The only way to pass validation is if Denominator != 0.
+// This is explicitly checked before returning nil.
+//
+// SECURITY: Zero denominator would cause division by zero in downstream calculations.
+// This validation ensures the invariant is enforced at the earliest possible point,
+// preventing malformed transactions from entering the gossip layer.
+func (r *Ratio) ValidateBasic() error {
+	if r.Denominator == 0 {
+		return fmt.Errorf("denominator cannot be zero")
+	}
+	return nil
+}
+
 // Transaction represents a signed transaction
 type Transaction struct {
 	// Account is the account executing this transaction
@@ -123,6 +165,20 @@ func (tx *Transaction) ValidateBasic() error {
 		return fmt.Errorf("%w: memo exceeds 512 bytes", ErrInvalidTransaction)
 	}
 
+	// Validate Fee
+	// SECURITY: Validate fee before transaction enters gossip layer to prevent
+	// malformed transactions from propagating through the network.
+	if err := tx.Fee.ValidateBasic(); err != nil {
+		return fmt.Errorf("%w: invalid fee: %v", ErrInvalidTransaction, err)
+	}
+
+	// Validate FeeSlippage
+	// SECURITY: Zero denominator in Ratio would cause undefined behavior downstream.
+	// This validation ensures malformed FeeSlippage is caught at the earliest point.
+	if err := tx.FeeSlippage.ValidateBasic(); err != nil {
+		return fmt.Errorf("%w: invalid fee_slippage: %v", ErrInvalidTransaction, err)
+	}
+
 	return nil
 }
 
@@ -135,39 +191,6 @@ func (tx *Transaction) Hash() []byte {
 	for _, msg := range tx.Messages {
 		h.Write([]byte(msg.Type()))
 	}
-	return h.Sum(nil)
-}
-
-// GetSignBytes returns the bytes to sign for this transaction.
-//
-// Deprecated: This method uses a non-standard serialization format that does not
-// include chainID for replay protection. Use ToSignDoc().GetSignBytes() instead
-// for SignDoc-based verification with proper cross-chain replay attack prevention.
-//
-// TODO(follow-up): Remove this method or rename to LegacyGetSignBytes() once all
-// callers are migrated to SignDoc-based verification. See PR #25 review from
-// Conductor for details.
-func (tx *Transaction) GetSignBytes() []byte {
-	// TODO: Use proper canonical serialization (Cramberry) for production
-	// For now, use a simple concatenation
-	h := sha256.New()
-	h.Write([]byte(tx.Account))
-
-	// Add nonce
-	nonceBytes := make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		nonceBytes[i] = byte(tx.Nonce >> (8 * i))
-	}
-	h.Write(nonceBytes)
-
-	// Add messages
-	for _, msg := range tx.Messages {
-		h.Write([]byte(msg.Type()))
-	}
-
-	// Add memo
-	h.Write([]byte(tx.Memo))
-
 	return h.Sum(nil)
 }
 

@@ -11,6 +11,7 @@ import (
 )
 
 // mockModule implements Module for testing
+// nolint:unused // Reserved for future tests requiring a mock module
 type mockModule struct {
 	baseModule
 }

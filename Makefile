@@ -1,4 +1,4 @@
-.PHONY: all build test test-race lint clean install-tools generate
+.PHONY: all build test test-race lint clean install-tools generate bench bench-compare
 
 all: build test
 
@@ -31,6 +31,7 @@ clean:
 install-tools:
 	@echo "Installing development tools..."
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@go install golang.org/x/perf/cmd/benchstat@latest
 
 mod-tidy:
 	@echo "Tidying go.mod..."
@@ -54,3 +55,16 @@ clean-generated:
 	@rm -rf ./modules/auth/generated
 	@rm -rf ./modules/bank/generated
 	@rm -rf ./modules/staking/generated
+
+bench:
+	@echo "Running benchmarks..."
+	@go test -bench=. -benchmem ./...
+
+bench-save:
+	@echo "Running benchmarks and saving to baseline..."
+	@go test -bench=. -benchmem -count=5 ./... 2>/dev/null | tee benchmarks/baseline.txt
+
+bench-compare:
+	@echo "Running benchmarks and comparing to baseline..."
+	@go test -bench=. -benchmem -count=5 ./... 2>/dev/null > /tmp/bench-new.txt
+	@benchstat benchmarks/baseline.txt /tmp/bench-new.txt

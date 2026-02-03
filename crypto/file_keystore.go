@@ -60,7 +60,7 @@ type fileKeyData struct {
 // - Password is kept in memory for the lifetime of the KeyStore
 // - Each key uses a unique salt and nonce
 // - Files are created with mode 0600 (owner read/write only)
-func NewFileKeyStore(dir string, password string) (KeyStore, error) {
+func NewFileKeyStore(dir string, password string) (EncryptedKeyStore, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("%w: directory path is empty", ErrKeyStoreIO)
 	}
