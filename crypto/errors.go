@@ -27,4 +27,7 @@ var (
 
 	// ErrInvalidPassword is returned when decryption fails due to wrong password.
 	ErrInvalidPassword = errors.New("invalid password")
+
+	// ErrKeyStoreClosed is returned when operations are attempted on a closed store.
+	ErrKeyStoreClosed = errors.New("key store is closed")
 )

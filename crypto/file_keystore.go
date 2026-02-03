@@ -37,10 +37,12 @@ const (
 
 // FileKeyStore implements KeyStore with encrypted file storage.
 // Keys are encrypted using AES-256-GCM with PBKDF2-derived keys.
+// Thread-safe via RWMutex. Implements io.Closer for graceful shutdown.
 type FileKeyStore struct {
 	dir      string
 	password []byte // kept for encryption operations
 	mu       sync.RWMutex
+	closed   bool // indicates if the store has been closed
 }
 
 // fileKeyData is the JSON structure stored on disk.
@@ -89,6 +91,7 @@ func NewFileKeyStore(dir string, password string) (EncryptedKeyStore, error) {
 }
 
 // Store encrypts and saves a key to disk.
+// Returns ErrKeyStoreClosed if the store has been closed.
 func (fs *FileKeyStore) Store(name string, key EncryptedKey) error {
 	if err := validateKeyName(name); err != nil {
 		return err
@@ -96,6 +99,10 @@ func (fs *FileKeyStore) Store(name string, key EncryptedKey) error {
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+
+	if err := fs.checkClosed(); err != nil {
+		return err
+	}
 
 	filePath := fs.keyFilePath(name)
 
@@ -152,6 +159,7 @@ func (fs *FileKeyStore) Store(name string, key EncryptedKey) error {
 }
 
 // Load reads and decrypts a key from disk.
+// Returns ErrKeyStoreClosed if the store has been closed.
 func (fs *FileKeyStore) Load(name string) (EncryptedKey, error) {
 	if err := validateKeyName(name); err != nil {
 		return EncryptedKey{}, err
@@ -159,6 +167,10 @@ func (fs *FileKeyStore) Load(name string) (EncryptedKey, error) {
 
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
+
+	if err := fs.checkClosed(); err != nil {
+		return EncryptedKey{}, err
+	}
 
 	filePath := fs.keyFilePath(name)
 
@@ -226,6 +238,7 @@ func (fs *FileKeyStore) Load(name string) (EncryptedKey, error) {
 }
 
 // Delete removes a key file from disk.
+// Returns ErrKeyStoreClosed if the store has been closed.
 func (fs *FileKeyStore) Delete(name string) error {
 	if err := validateKeyName(name); err != nil {
 		return err
@@ -233,6 +246,10 @@ func (fs *FileKeyStore) Delete(name string) error {
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+
+	if err := fs.checkClosed(); err != nil {
+		return err
+	}
 
 	filePath := fs.keyFilePath(name)
 
@@ -250,9 +267,14 @@ func (fs *FileKeyStore) Delete(name string) error {
 }
 
 // List returns all key names in the store.
+// Returns ErrKeyStoreClosed if the store has been closed.
 func (fs *FileKeyStore) List() ([]string, error) {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
+
+	if err := fs.checkClosed(); err != nil {
+		return nil, err
+	}
 
 	entries, err := os.ReadDir(fs.dir)
 	if err != nil {
@@ -352,4 +374,34 @@ func clearBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// Close marks the store as closed and zeroizes the password.
+// After Close is called, all operations will return ErrKeyStoreClosed.
+// Safe to call multiple times; subsequent calls are no-ops.
+// Complexity: O(1).
+func (fs *FileKeyStore) Close() error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	if fs.closed {
+		return nil // Already closed, no-op
+	}
+
+	fs.closed = true
+
+	// Zeroize password to minimize memory exposure
+	clearBytes(fs.password)
+	fs.password = nil
+
+	return nil
+}
+
+// checkClosed returns ErrKeyStoreClosed if the store is closed.
+// Must be called with at least a read lock held.
+func (fs *FileKeyStore) checkClosed() error {
+	if fs.closed {
+		return ErrKeyStoreClosed
+	}
+	return nil
 }
