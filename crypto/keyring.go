@@ -1,9 +1,14 @@
 package crypto
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // Key name constraints.
@@ -264,9 +269,17 @@ func (kr *defaultKeyring) ImportKey(name string, privKeyBytes []byte, algo Algor
 	return signer, nil
 }
 
+// PBKDF2 parameters for key derivation (must match file_keystore.go).
+const (
+	exportPBKDF2Iterations = 100_000
+	exportPBKDF2KeyLen     = 32 // AES-256 requires 32-byte key
+)
+
 // ExportKey exports a private key.
-// Password is reserved for future encrypted keystore support.
+// For encrypted keys, password is used to derive the decryption key via PBKDF2.
+// Returns ErrInvalidPassword if the password is incorrect for encrypted keys.
 // Note: Caller should zero the returned bytes when done with them.
+// Complexity: O(store.Get) + O(PBKDF2) for encrypted keys.
 func (kr *defaultKeyring) ExportKey(name string, password string) ([]byte, error) {
 	kr.mu.RLock()
 	if err := kr.checkClosed(); err != nil {
@@ -279,18 +292,72 @@ func (kr *defaultKeyring) ExportKey(name string, password string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	// Zero the entry's private key bytes after we've copied them
+	// Zero the entry's private key bytes after we've copied/decrypted them
 	defer Zeroize(entry.PrivateKey)
+	// Also zero Salt if present (not strictly sensitive but good hygiene)
+	defer Zeroize(entry.Salt)
 
-	// TODO: Implement decryption when encrypted keystores are supported
 	if entry.Encrypted {
-		return nil, errors.New("encrypted keys not yet supported")
+		return kr.decryptExportKey(entry, password, name)
 	}
 
 	// Return a copy to prevent external mutation
 	result := make([]byte, len(entry.PrivateKey))
 	copy(result, entry.PrivateKey)
 	return result, nil
+}
+
+// decryptExportKey decrypts an encrypted key entry using the provided password.
+// Uses PBKDF2 for key derivation and AES-GCM for decryption.
+// Complexity: O(PBKDF2 iterations) + O(ciphertext length).
+func (kr *defaultKeyring) decryptExportKey(entry *KeyEntry, password string, name string) ([]byte, error) {
+	// Validate encryption parameters
+	if len(entry.Salt) < MinSaltLength {
+		return nil, ErrInvalidEncryptionParams
+	}
+	if len(entry.Nonce) != AESGCMNonceLength {
+		return nil, ErrInvalidEncryptionParams
+	}
+
+	// Convert password to bytes and defer zeroing
+	passwordBytes := []byte(password)
+	defer Zeroize(passwordBytes)
+
+	// Derive decryption key from password and stored salt
+	derivedKey := pbkdf2.Key(passwordBytes, entry.Salt, exportPBKDF2Iterations, exportPBKDF2KeyLen, sha256.New)
+	defer Zeroize(derivedKey) // Zero derived key after use
+
+	// Decrypt private key data using AES-GCM
+	plaintext, err := decryptAESGCMKeyring(derivedKey, entry.Nonce, entry.PrivateKey, []byte(name))
+	if err != nil {
+		// Authentication failure means wrong password or tampered data
+		return nil, ErrInvalidPassword
+	}
+
+	return plaintext, nil
+}
+
+// decryptAESGCMKeyring decrypts ciphertext using AES-256-GCM.
+// Returns error if authentication fails (wrong password or tampered data).
+// Complexity: O(n) where n is ciphertext length.
+func decryptAESGCMKeyring(key, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Open decrypts and verifies the authentication tag
+	plaintext, err := aead.Open(nil, nonce, ciphertext, additionalData)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
 }
 
 // GetKey retrieves a signer by name.
