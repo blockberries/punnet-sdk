@@ -2,11 +2,39 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"testing"
+
+	"golang.org/x/crypto/pbkdf2"
 )
+
+// Test helpers for encrypted key operations
+
+// pbkdf2TestHelper derives a key using PBKDF2-SHA256.
+func pbkdf2TestHelper(password, salt []byte, iterations, keyLen int) []byte {
+	return pbkdf2.Key(password, salt, iterations, keyLen, sha256.New)
+}
+
+// aesGCMEncryptTestHelper encrypts plaintext using AES-256-GCM.
+func aesGCMEncryptTestHelper(key, nonce, plaintext, additionalData []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext := aead.Seal(nil, nonce, plaintext, additionalData)
+	return ciphertext, nil
+}
 
 func TestKeyringNewKey(t *testing.T) {
 	store := NewMemoryStore()
@@ -1329,6 +1357,235 @@ func TestKeyringSignFromStoreZeroizesTemporaryKey(t *testing.T) {
 	}
 }
 
+// Tests for encrypted key export (Issue #46)
+
+func TestKeyringExportKeyEncrypted(t *testing.T) {
+	// Create a store with an encrypted key entry
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// First, create a plaintext key
+	_, err := kr.NewKey("encrypted-test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	// Get the original plaintext key
+	originalKey, err := kr.ExportKey("encrypted-test", "")
+	if err != nil {
+		t.Fatalf("ExportKey (plaintext) failed: %v", err)
+	}
+
+	// Now encrypt this key and store it
+	password := "test-password-123"
+	encryptedEntry, err := createEncryptedKeyEntry("encrypted-test", originalKey, password)
+	if err != nil {
+		t.Fatalf("createEncryptedKeyEntry failed: %v", err)
+	}
+
+	// Put encrypted entry into store (overwrite)
+	if err := store.Put(encryptedEntry, true); err != nil {
+		t.Fatalf("store.Put failed: %v", err)
+	}
+
+	// Create a new keyring to avoid cache
+	kr2 := NewKeyring(store)
+
+	// Export with correct password should succeed
+	decrypted, err := kr2.ExportKey("encrypted-test", password)
+	if err != nil {
+		t.Fatalf("ExportKey (encrypted, correct password) failed: %v", err)
+	}
+
+	// Verify decrypted key matches original
+	if !bytes.Equal(decrypted, originalKey) {
+		t.Error("decrypted key does not match original")
+	}
+
+	// Zero the test keys
+	Zeroize(originalKey)
+	Zeroize(decrypted)
+}
+
+func TestKeyringExportKeyEncryptedWrongPassword(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create and encrypt a key
+	_, err := kr.NewKey("wrong-pass-test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	originalKey, err := kr.ExportKey("wrong-pass-test", "")
+	if err != nil {
+		t.Fatalf("ExportKey (plaintext) failed: %v", err)
+	}
+	defer Zeroize(originalKey)
+
+	password := "correct-password"
+	encryptedEntry, err := createEncryptedKeyEntry("wrong-pass-test", originalKey, password)
+	if err != nil {
+		t.Fatalf("createEncryptedKeyEntry failed: %v", err)
+	}
+
+	if err := store.Put(encryptedEntry, true); err != nil {
+		t.Fatalf("store.Put failed: %v", err)
+	}
+
+	// Create a new keyring
+	kr2 := NewKeyring(store)
+
+	// Export with wrong password should return ErrInvalidPassword
+	_, err = kr2.ExportKey("wrong-pass-test", "wrong-password")
+	if err != ErrInvalidPassword {
+		t.Errorf("expected ErrInvalidPassword, got %v", err)
+	}
+}
+
+func TestKeyringExportKeyEncryptedEmptyPassword(t *testing.T) {
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+
+	// Create and encrypt a key
+	_, err := kr.NewKey("empty-pass-test", AlgorithmEd25519)
+	if err != nil {
+		t.Fatalf("NewKey failed: %v", err)
+	}
+
+	originalKey, err := kr.ExportKey("empty-pass-test", "")
+	if err != nil {
+		t.Fatalf("ExportKey (plaintext) failed: %v", err)
+	}
+	defer Zeroize(originalKey)
+
+	password := "actual-password"
+	encryptedEntry, err := createEncryptedKeyEntry("empty-pass-test", originalKey, password)
+	if err != nil {
+		t.Fatalf("createEncryptedKeyEntry failed: %v", err)
+	}
+
+	if err := store.Put(encryptedEntry, true); err != nil {
+		t.Fatalf("store.Put failed: %v", err)
+	}
+
+	kr2 := NewKeyring(store)
+
+	// Export with empty password should fail for encrypted key
+	_, err = kr2.ExportKey("empty-pass-test", "")
+	if err != ErrInvalidPassword {
+		t.Errorf("expected ErrInvalidPassword for empty password, got %v", err)
+	}
+}
+
+func TestKeyringExportKeyInvalidEncryptionParams(t *testing.T) {
+	store := NewMemoryStore()
+
+	// Create entry with invalid salt (too short)
+	badSaltEntry := &KeyEntry{
+		Name:       "bad-salt",
+		Algorithm:  AlgorithmEd25519,
+		PrivateKey: []byte("some-ciphertext"),
+		PublicKey:  []byte("some-public-key"),
+		Encrypted:  true,
+		Salt:       []byte("short"), // Too short, should be >= 16 bytes
+		Nonce:      make([]byte, AESGCMNonceLength),
+	}
+	if err := store.Put(badSaltEntry, false); err != nil {
+		t.Fatalf("store.Put failed: %v", err)
+	}
+
+	kr := NewKeyring(store)
+
+	_, err := kr.ExportKey("bad-salt", "any-password")
+	if err != ErrInvalidEncryptionParams {
+		t.Errorf("expected ErrInvalidEncryptionParams for short salt, got %v", err)
+	}
+
+	// Create entry with invalid nonce (wrong length)
+	badNonceEntry := &KeyEntry{
+		Name:       "bad-nonce",
+		Algorithm:  AlgorithmEd25519,
+		PrivateKey: []byte("some-ciphertext"),
+		PublicKey:  []byte("some-public-key"),
+		Encrypted:  true,
+		Salt:       make([]byte, MinSaltLength),
+		Nonce:      []byte("wronglen"), // Should be exactly 12 bytes
+	}
+	if err := store.Put(badNonceEntry, false); err != nil {
+		t.Fatalf("store.Put failed: %v", err)
+	}
+
+	_, err = kr.ExportKey("bad-nonce", "any-password")
+	if err != ErrInvalidEncryptionParams {
+		t.Errorf("expected ErrInvalidEncryptionParams for bad nonce, got %v", err)
+	}
+}
+
+// createEncryptedKeyEntry creates an encrypted KeyEntry using the same
+// encryption scheme as FileKeyStore (PBKDF2 + AES-GCM).
+// This is a helper for testing ExportKey decryption.
+func createEncryptedKeyEntry(name string, plaintext []byte, password string) (*KeyEntry, error) {
+	// Generate salt and nonce
+	salt := make([]byte, MinSaltLength)
+	nonce := make([]byte, AESGCMNonceLength)
+
+	// Use deterministic values for testing (in real use, use crypto/rand)
+	for i := range salt {
+		salt[i] = byte(i + 1)
+	}
+	for i := range nonce {
+		nonce[i] = byte(i + 100)
+	}
+
+	// Derive encryption key using PBKDF2
+	passwordBytes := []byte(password)
+	derivedKey := deriveKeyForTest(passwordBytes, salt)
+	defer Zeroize(derivedKey)
+
+	// Encrypt using AES-GCM
+	ciphertext, err := encryptForTest(derivedKey, nonce, plaintext, []byte(name))
+	if err != nil {
+		return nil, err
+	}
+
+	// Create public key (for Ed25519, it's the last 32 bytes of 64-byte private key)
+	var pubKey []byte
+	if len(plaintext) >= 64 {
+		pubKey = make([]byte, 32)
+		copy(pubKey, plaintext[32:64])
+	}
+
+	return &KeyEntry{
+		Name:       name,
+		Algorithm:  AlgorithmEd25519,
+		PrivateKey: ciphertext,
+		PublicKey:  pubKey,
+		Encrypted:  true,
+		Salt:       salt,
+		Nonce:      nonce,
+	}, nil
+}
+
+// deriveKeyForTest derives an encryption key using PBKDF2.
+// Uses same parameters as ExportKey decryption.
+func deriveKeyForTest(password, salt []byte) []byte {
+	return pbkdf2ForTest(password, salt, 100_000, 32)
+}
+
+// pbkdf2ForTest is a minimal PBKDF2 implementation for testing.
+// In production code, this uses golang.org/x/crypto/pbkdf2.
+func pbkdf2ForTest(password, salt []byte, iterations, keyLen int) []byte {
+	// Import the real PBKDF2 function
+	// Note: This uses the same import as the main code
+	return pbkdf2TestHelper(password, salt, iterations, keyLen)
+}
+
+// encryptForTest encrypts plaintext using AES-256-GCM.
+func encryptForTest(key, nonce, plaintext, additionalData []byte) ([]byte, error) {
+	return aesGCMEncryptTestHelper(key, nonce, plaintext, additionalData)
+}
+
 func BenchmarkKeyringClose(b *testing.B) {
 	// Benchmark Close() with various numbers of keys
 	for _, numKeys := range []int{10, 100, 1000} {
@@ -1345,5 +1602,25 @@ func BenchmarkKeyringClose(b *testing.B) {
 				_ = kr.Close()
 			}
 		})
+	}
+}
+
+func BenchmarkKeyringExportKeyEncrypted(b *testing.B) {
+	// Set up an encrypted key
+	store := NewMemoryStore()
+	kr := NewKeyring(store)
+	_, _ = kr.NewKey("bench-encrypted", AlgorithmEd25519)
+	originalKey, _ := kr.ExportKey("bench-encrypted", "")
+
+	password := "benchmark-password"
+	encryptedEntry, _ := createEncryptedKeyEntry("bench-encrypted", originalKey, password)
+	_ = store.Put(encryptedEntry, true)
+
+	kr2 := NewKeyring(store)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		decrypted, _ := kr2.ExportKey("bench-encrypted", password)
+		Zeroize(decrypted)
 	}
 }
