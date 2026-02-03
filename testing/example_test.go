@@ -99,3 +99,25 @@ func TestExampleMessage_Determinism_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestExampleMessage_Concurrent shows the recommended pattern for testing
+// concurrent safety of SignDocSerializable implementations.
+//
+// IMPORTANT: Always run with -race flag for complete coverage:
+//
+//	go test -race ./...
+func TestExampleMessage_Concurrent(t *testing.T) {
+	msg := &ExampleMessage{
+		From:   "alice",
+		To:     "bob",
+		Amount: 1000,
+		Denom:  "uatom",
+	}
+
+	// Test with 10 goroutines, 100 iterations each
+	// This catches race conditions in implementations that use:
+	// - Shared mutable state without synchronization
+	// - Lazy-initialized caches without proper locking
+	// - Reused buffers across concurrent calls
+	punnettesting.AssertSignDocDataDeterminismConcurrent(t, msg, 10, 100)
+}
