@@ -149,6 +149,9 @@ func generateEdgeCaseVectors() []TestVector {
 	// Minimum valid transaction
 	vectors = append(vectors, generateMinimalVector())
 
+	// Nil vs empty value vectors for cross-implementation compatibility
+	vectors = append(vectors, generateNilVsEmptyVectors()...)
+
 	return vectors
 }
 
@@ -787,6 +790,362 @@ func generateMinimalVector() TestVector {
 			},
 		},
 	}
+}
+
+// generateNilVsEmptyVectors creates test vectors that explicitly test nil vs empty value
+// serialization for cross-implementation compatibility.
+//
+// SECURITY RATIONALE: Different programming languages may serialize null/nil vs empty values
+// differently. For example:
+// - Go: nil slice vs empty slice ([]string(nil) vs []string{})
+// - JavaScript: null vs undefined vs "" vs []
+// - Rust: Option<Vec<T>> None vs Some(Vec::new())
+// - Python: None vs "" vs []
+//
+// These vectors ensure all implementations produce identical signatures for equivalent transactions.
+func generateNilVsEmptyVectors() []TestVector {
+	vectors := []TestVector{}
+
+	// Memo variants: empty string (canonical form)
+	// Note: In the canonical SignDoc format, memo is ALWAYS serialized as a string.
+	// Null/nil memo is normalized to empty string "".
+	vectors = append(vectors, generateEmptyStringMemoVector())
+
+	// Fee amount variants: empty array (canonical form)
+	// Note: In the canonical SignDoc format, fee.amount is ALWAYS an array.
+	// Null/nil amounts are normalized to empty array [].
+	vectors = append(vectors, generateEmptyFeeAmountVector())
+
+	// Combined: empty memo AND empty fee amounts
+	vectors = append(vectors, generateEmptyMemoAndFeeVector())
+
+	// Message data variants: empty object vs null
+	vectors = append(vectors, generateEmptyMessageDataVector())
+	vectors = append(vectors, generateNullMessageDataVector())
+
+	return vectors
+}
+
+// generateEmptyStringMemoVector tests that empty string memo serializes correctly.
+// This is the canonical form - implementations MUST normalize null/nil/undefined memo to "".
+func generateEmptyStringMemoVector() TestVector {
+	input := TestVectorInput{
+		ChainID:         "nil-vs-empty-test",
+		Account:         "tester",
+		AccountSequence: "1",
+		Nonce:           "1",
+		Memo:            "", // Empty string (canonical form)
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.NilVsEmpty",
+				Data: json.RawMessage(`{"field":"memo_test"}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{{Denom: "stake", Amount: "100"}},
+			GasLimit: "50000",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
+
+	return TestVector{
+		Name: "nil_vs_empty_memo_string",
+		Description: `Tests empty string memo serialization.
+CRITICAL: Implementations MUST normalize null/nil/undefined memo to empty string "".
+The canonical JSON MUST contain "memo":"" (not omitted, not null).
+Different representations that MUST all produce this output:
+- Go: memo = "" or memo = ""
+- JavaScript: memo = "" or memo = null or memo = undefined
+- Rust: memo = String::new() or memo = None (Option<String>)
+- Python: memo = "" or memo = None`,
+		Category: "edge_case",
+		Input:    input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"ed25519": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Ed25519.PrivateKey),
+					PublicKeyHex:  hex.EncodeToString(WellKnownTestKeys.Ed25519.PublicKey),
+					SignatureHex:  hex.EncodeToString(ed25519Sig),
+				},
+			},
+		},
+	}
+}
+
+// generateEmptyFeeAmountVector tests that empty fee amount array serializes correctly.
+// This is the canonical form - implementations MUST normalize null/nil to empty array [].
+func generateEmptyFeeAmountVector() TestVector {
+	input := TestVectorInput{
+		ChainID:         "nil-vs-empty-test",
+		Account:         "tester",
+		AccountSequence: "2",
+		Nonce:           "2",
+		Memo:            "fee amount test",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.NilVsEmpty",
+				Data: json.RawMessage(`{"field":"fee_test"}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{}, // Empty array (canonical form)
+			GasLimit: "0",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
+
+	return TestVector{
+		Name: "nil_vs_empty_fee_amount",
+		Description: `Tests empty fee amount array serialization.
+CRITICAL: Implementations MUST normalize null/nil fee amounts to empty array [].
+The canonical JSON MUST contain "amount":[] (not omitted, not null).
+Different representations that MUST all produce this output:
+- Go: Amount = []SignDocCoin{} or Amount = nil
+- JavaScript: amount = [] or amount = null or amount = undefined
+- Rust: amount = Vec::new() or amount = None (if Option<Vec<Coin>>)
+- Python: amount = [] or amount = None`,
+		Category: "edge_case",
+		Input:    input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"ed25519": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Ed25519.PrivateKey),
+					PublicKeyHex:  hex.EncodeToString(WellKnownTestKeys.Ed25519.PublicKey),
+					SignatureHex:  hex.EncodeToString(ed25519Sig),
+				},
+			},
+		},
+	}
+}
+
+// generateEmptyMemoAndFeeVector tests combined empty memo AND empty fee amounts.
+// This validates that multiple empty/nil fields are handled correctly together.
+func generateEmptyMemoAndFeeVector() TestVector {
+	input := TestVectorInput{
+		ChainID:         "nil-vs-empty-test",
+		Account:         "tester",
+		AccountSequence: "3",
+		Nonce:           "3",
+		Memo:            "", // Empty
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.NilVsEmpty",
+				Data: json.RawMessage(`{"field":"combined_test"}`),
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{}, // Empty array
+			GasLimit: "0",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
+
+	return TestVector{
+		Name: "nil_vs_empty_combined",
+		Description: `Tests both empty memo AND empty fee amounts together.
+This validates that implementations correctly handle multiple nil/empty fields.
+Expected canonical JSON contains both "memo":"" AND "amount":[]`,
+		Category: "edge_case",
+		Input:    input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"ed25519": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Ed25519.PrivateKey),
+					PublicKeyHex:  hex.EncodeToString(WellKnownTestKeys.Ed25519.PublicKey),
+					SignatureHex:  hex.EncodeToString(ed25519Sig),
+				},
+			},
+		},
+	}
+}
+
+// generateEmptyMessageDataVector tests empty object {} as message data.
+// This is valid and must serialize deterministically.
+func generateEmptyMessageDataVector() TestVector {
+	input := TestVectorInput{
+		ChainID:         "nil-vs-empty-test",
+		Account:         "tester",
+		AccountSequence: "4",
+		Nonce:           "4",
+		Memo:            "empty message data test",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.EmptyData",
+				Data: json.RawMessage(`{}`), // Empty object
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{{Denom: "stake", Amount: "100"}},
+			GasLimit: "50000",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInput(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
+
+	return TestVector{
+		Name: "nil_vs_empty_message_data_object",
+		Description: `Tests empty object {} as message data.
+Empty object is a valid message data value and MUST serialize as "data":{}
+This is distinct from null message data (see nil_vs_empty_message_data_null).`,
+		Category: "edge_case",
+		Input:    input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"ed25519": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Ed25519.PrivateKey),
+					PublicKeyHex:  hex.EncodeToString(WellKnownTestKeys.Ed25519.PublicKey),
+					SignatureHex:  hex.EncodeToString(ed25519Sig),
+				},
+			},
+		},
+	}
+}
+
+// generateNullMessageDataVector tests null as message data.
+// When msg.Data is nil/null, it serializes as "data":null.
+func generateNullMessageDataVector() TestVector {
+	// For this test, we need to manually set Data to nil after building
+	input := TestVectorInput{
+		ChainID:         "nil-vs-empty-test",
+		Account:         "tester",
+		AccountSequence: "5",
+		Nonce:           "5",
+		Memo:            "null message data test",
+		Messages: []TestVectorMessage{
+			{
+				Type: "/test.NullData",
+				Data: nil, // Explicitly nil/null
+			},
+		},
+		Fee: TestVectorFee{
+			Amount:   []TestVectorCoin{{Denom: "stake", Amount: "100"}},
+			GasLimit: "50000",
+		},
+		FeeSlippage: TestVectorRatio{
+			Numerator:   "0",
+			Denominator: "1",
+		},
+	}
+
+	signDoc := buildSignDocFromInputWithNullData(input)
+	signDocJSON := mustJSON(signDoc)
+	signBytes := mustSignBytes(signDoc)
+	ed25519Sig := ed25519.Sign(WellKnownTestKeys.Ed25519.PrivateKey, signBytes)
+
+	return TestVector{
+		Name: "nil_vs_empty_message_data_null",
+		Description: `Tests null as message data.
+When message data is null/nil, it MUST serialize as "data":null
+This is distinct from empty object {} (see nil_vs_empty_message_data_object).
+SECURITY: Implementations must distinguish between null and empty object
+as they produce different signatures.`,
+		Category: "edge_case",
+		Input:    input,
+		Expected: TestVectorExpected{
+			SignDocJSON:  string(signDocJSON),
+			SignBytesHex: hex.EncodeToString(signBytes),
+			Signatures: map[string]TestVectorSignature{
+				"ed25519": {
+					PrivateKeyHex: hex.EncodeToString(WellKnownTestKeys.Ed25519.PrivateKey),
+					PublicKeyHex:  hex.EncodeToString(WellKnownTestKeys.Ed25519.PublicKey),
+					SignatureHex:  hex.EncodeToString(ed25519Sig),
+				},
+			},
+		},
+	}
+}
+
+// buildSignDocFromInputWithNullData is like buildSignDocFromInput but allows null message data.
+func buildSignDocFromInputWithNullData(input TestVectorInput) *types.SignDoc {
+	var accountSequence, nonce uint64
+	if err := json.Unmarshal([]byte(`"`+input.AccountSequence+`"`), (*types.StringUint64)(&accountSequence)); err != nil {
+		panic("invalid account_sequence in test vector: " + err.Error())
+	}
+	if err := json.Unmarshal([]byte(`"`+input.Nonce+`"`), (*types.StringUint64)(&nonce)); err != nil {
+		panic("invalid nonce in test vector: " + err.Error())
+	}
+
+	feeCoins := make([]types.SignDocCoin, len(input.Fee.Amount))
+	for i, coin := range input.Fee.Amount {
+		feeCoins[i] = types.SignDocCoin{
+			Denom:  coin.Denom,
+			Amount: coin.Amount,
+		}
+	}
+
+	fee := types.SignDocFee{
+		Amount:   feeCoins,
+		GasLimit: input.Fee.GasLimit,
+	}
+
+	slippage := types.SignDocRatio{
+		Numerator:   input.FeeSlippage.Numerator,
+		Denominator: input.FeeSlippage.Denominator,
+	}
+
+	signDoc := types.NewSignDocWithFee(
+		input.ChainID,
+		accountSequence,
+		input.Account,
+		nonce,
+		input.Memo,
+		fee,
+		slippage,
+	)
+
+	// Add messages - preserve null data as nil
+	for _, msg := range input.Messages {
+		if msg.Data == nil {
+			signDoc.AddMessage(msg.Type, nil)
+		} else {
+			var compactData bytes.Buffer
+			if err := json.Compact(&compactData, msg.Data); err != nil {
+				panic("failed to compact message data: " + err.Error())
+			}
+			signDoc.AddMessage(msg.Type, json.RawMessage(compactData.Bytes()))
+		}
+	}
+
+	return signDoc
 }
 
 // buildSignDocFromInput constructs a SignDoc from test vector input.
