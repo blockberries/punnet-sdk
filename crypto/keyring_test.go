@@ -332,7 +332,7 @@ func BenchmarkKeyringNewKey(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		name := string(rune('a' + (i % 26)))
 		// Delete if exists to allow recreation
-		kr.DeleteKey(name)
+		_ = kr.DeleteKey(name)
 		_, _ = kr.NewKey(name, AlgorithmEd25519)
 	}
 }
@@ -340,7 +340,7 @@ func BenchmarkKeyringNewKey(b *testing.B) {
 func BenchmarkKeyringGetKeyCached(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -351,7 +351,7 @@ func BenchmarkKeyringGetKeyCached(b *testing.B) {
 func BenchmarkKeyringGetKeyUncached(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store, WithCacheSize(0)) // Disable cache
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -362,7 +362,7 @@ func BenchmarkKeyringGetKeyUncached(b *testing.B) {
 func BenchmarkKeyringSign(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 	data := []byte("benchmark signing data")
 
 	b.ResetTimer()
@@ -374,7 +374,7 @@ func BenchmarkKeyringSign(b *testing.B) {
 func BenchmarkKeyringSignParallel(b *testing.B) {
 	store := NewMemoryStore()
 	kr := NewKeyring(store)
-	kr.NewKey("bench", AlgorithmEd25519)
+	_, _ = kr.NewKey("bench", AlgorithmEd25519)
 	data := []byte("benchmark signing data")
 
 	b.ResetTimer()
@@ -391,7 +391,7 @@ func BenchmarkKeyringListKeys(b *testing.B) {
 
 	// Add 100 keys
 	for i := 0; i < 100; i++ {
-		kr.NewKey(string(rune('a'+i/26))+string(rune('a'+i%26)), AlgorithmEd25519)
+		_, _ = kr.NewKey(string(rune('a'+i/26))+string(rune('a'+i%26)), AlgorithmEd25519)
 	}
 
 	b.ResetTimer()
@@ -408,7 +408,7 @@ func BenchmarkMemoryStoreGet(b *testing.B) {
 		PrivateKey: make([]byte, 64),
 		PublicKey:  make([]byte, 32),
 	}
-	store.Put(entry, false)
+	_ = store.Put(entry, false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -427,7 +427,7 @@ func BenchmarkMemoryStorePut(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		store.Put(entry, true) // Overwrite mode
+		_ = store.Put(entry, true) // Overwrite mode
 	}
 }
 
@@ -460,7 +460,7 @@ func TestKeyringKeyNameValidation(t *testing.T) {
 		}
 		// Clean up if key was created
 		if err == nil {
-			kr.DeleteKey(tt.name)
+			_ = kr.DeleteKey(tt.name)
 		}
 	}
 }
@@ -563,11 +563,11 @@ func TestKeyringConcurrentDeleteGet(t *testing.T) {
 		name := string(rune('a' + (i % 10)))
 		go func(n string) {
 			defer wg.Done()
-			kr.GetKey(n) // May succeed or fail, shouldn't panic
+			_, _ = kr.GetKey(n) // May succeed or fail, shouldn't panic
 		}(name)
 		go func(n string) {
 			defer wg.Done()
-			kr.DeleteKey(n) // May succeed or fail, shouldn't panic
+			_ = kr.DeleteKey(n) // May succeed or fail, shouldn't panic
 		}(name)
 	}
 	wg.Wait()

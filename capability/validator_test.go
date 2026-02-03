@@ -799,7 +799,7 @@ func XTestValidatorCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			cap.GetValidator(ctx, pubKey)
+			_, _ = cap.GetValidator(ctx, pubKey) // May succeed or fail, testing concurrency safety
 		}()
 	}
 
@@ -807,7 +807,7 @@ func XTestValidatorCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(power int64) {
 			defer wg.Done()
-			cap.SetValidatorPower(ctx, pubKey, power)
+			_ = cap.SetValidatorPower(ctx, pubKey, power) // May succeed or fail, testing concurrency safety
 		}(int64(i))
 	}
 
@@ -815,7 +815,7 @@ func XTestValidatorCapability_ConcurrentOperations_SKIPPED(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(active bool) {
 			defer wg.Done()
-			cap.SetValidatorActive(ctx, pubKey, active)
+			_ = cap.SetValidatorActive(ctx, pubKey, active) // May succeed or fail, testing concurrency safety
 		}(i%2 == 0)
 	}
 

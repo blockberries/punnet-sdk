@@ -236,7 +236,7 @@ func TestExecutor_Execute_Delete(t *testing.T) {
 
 	// First write a key
 	key := []byte("test/key")
-	store.Set(key, []byte("value"))
+	_ = store.Set(key, []byte("value"))
 
 	// Then delete it
 	effects := []Effect{
@@ -267,7 +267,7 @@ func TestExecutor_Execute_Read(t *testing.T) {
 
 	// Write a key first
 	key := []byte("test/key")
-	store.Set(key, []byte("value"))
+	_ = store.Set(key, []byte("value"))
 
 	// Read it
 	var dest string
@@ -320,8 +320,8 @@ func TestExecutor_Execute_Transfer(t *testing.T) {
 	// Set initial balances
 	from := types.AccountName("alice")
 	to := types.AccountName("bob")
-	balanceStore.SetBalance(from, "token", 1000)
-	balanceStore.SetBalance(to, "token", 500)
+	_ = balanceStore.SetBalance(from, "token", 1000)
+	_ = balanceStore.SetBalance(to, "token", 500)
 
 	// Transfer
 	effects := []Effect{
@@ -365,7 +365,7 @@ func TestExecutor_Execute_Transfer_InsufficientBalance(t *testing.T) {
 	// Set initial balance (insufficient)
 	from := types.AccountName("alice")
 	to := types.AccountName("bob")
-	balanceStore.SetBalance(from, "token", 50)
+	_ = balanceStore.SetBalance(from, "token", 50)
 
 	// Try to transfer more than balance
 	effects := []Effect{
@@ -684,9 +684,9 @@ func TestExecutionResult_GetEvents_Immutability(t *testing.T) {
 		Attributes: map[string][]byte{"key": []byte("value")},
 	})
 
-	// Get events and modify
+	// Get events and modify (result discarded - we're testing the original wasn't affected)
 	events1 := result.GetEvents()
-	events1 = append(events1, Event{Type: "modified"})
+	_ = append(events1, Event{Type: "modified"})
 
 	// Get events again
 	events2 := result.GetEvents()

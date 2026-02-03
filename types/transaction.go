@@ -138,39 +138,6 @@ func (tx *Transaction) Hash() []byte {
 	return h.Sum(nil)
 }
 
-// GetSignBytes returns the bytes to sign for this transaction.
-//
-// Deprecated: This method uses a non-standard serialization format that does not
-// include chainID for replay protection. Use ToSignDoc().GetSignBytes() instead
-// for SignDoc-based verification with proper cross-chain replay attack prevention.
-//
-// TODO(follow-up): Remove this method or rename to LegacyGetSignBytes() once all
-// callers are migrated to SignDoc-based verification. See PR #25 review from
-// Conductor for details.
-func (tx *Transaction) GetSignBytes() []byte {
-	// TODO: Use proper canonical serialization (Cramberry) for production
-	// For now, use a simple concatenation
-	h := sha256.New()
-	h.Write([]byte(tx.Account))
-
-	// Add nonce
-	nonceBytes := make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		nonceBytes[i] = byte(tx.Nonce >> (8 * i))
-	}
-	h.Write(nonceBytes)
-
-	// Add messages
-	for _, msg := range tx.Messages {
-		h.Write([]byte(msg.Type()))
-	}
-
-	// Add memo
-	h.Write([]byte(tx.Memo))
-
-	return h.Sum(nil)
-}
-
 // VerifyAuthorization verifies the transaction authorization using SignDoc-based verification.
 //
 // PRECONDITION: account is not nil
