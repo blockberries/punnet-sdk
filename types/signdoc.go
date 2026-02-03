@@ -237,9 +237,30 @@ func (sd *SignDoc) SetFeeSlippage(slippage SignDocRatio) {
 
 // AddMessage appends a message to the SignDoc.
 //
-// PRECONDITION: data MUST be canonical JSON if deterministic signing is required.
-// Non-canonical JSON (e.g., {"b":1,"a":2}) will be preserved as-is, which may cause
-// signature mismatches across implementations that canonicalize message data.
+// PRECONDITION: data MUST be canonical JSON (compact, with keys in the order
+// produced by the message's own ToJSON method or equivalent deterministic serializer).
+//
+// CANONICAL JSON REQUIREMENTS:
+//   - Compact: No whitespace outside of string values (validated by ValidateBasic)
+//   - Ordered: Object keys in consistent order (NOT validated - caller's responsibility)
+//   - Escaped: Proper JSON escaping for special characters
+//
+// RATIONALE: Re-canonicalizing the data would require parsing it as a generic map,
+// which loses type information (e.g., cannot distinguish {"amount":"100"} from
+// {"amount":100} after round-tripping through map[string]interface{}) and adds
+// significant overhead for large messages. Since message data typically comes from
+// the SDK's own serialization code, we trust it to be canonical.
+//
+// SECURITY: Non-canonical JSON (e.g., {"b":1,"a":2} vs {"a":2,"b":1}) will produce
+// different signatures for semantically identical messages. This can cause:
+//   - Signature verification failures across implementations
+//   - Consensus failures if nodes canonicalize differently
+//
+// RECOMMENDATION: Always construct message data using the SDK's message types and
+// their ToJSON methods, which guarantee canonical output. If constructing JSON
+// manually, use a deterministic JSON encoder with sorted keys.
+//
+// See also: ValidateBasic() validates compactness but NOT key ordering.
 func (sd *SignDoc) AddMessage(msgType string, data json.RawMessage) {
 	sd.Messages = append(sd.Messages, SignDocMessage{
 		Type: msgType,
