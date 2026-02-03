@@ -304,10 +304,13 @@ func secp256r1PrivateKeyFromBytes(data []byte) (PrivateKey, error) {
 
 	d := new(big.Int).SetBytes(data)
 	curve := elliptic.P256()
+	N := curve.Params().N
 
 	// Validate that d is within range [1, n-1]
-	if d.Sign() <= 0 || d.Cmp(curve.Params().N) >= 0 {
-		return nil, fmt.Errorf("invalid secp256r1 private key: out of range")
+	// d = 0 is invalid: produces identity point as public key
+	// d >= n is invalid: mathematically equivalent to d mod n, undefined behavior
+	if d.Sign() == 0 || d.Cmp(N) >= 0 {
+		return nil, fmt.Errorf("invalid secp256r1 private key: scalar out of range [1, n-1]")
 	}
 
 	// Compute public key

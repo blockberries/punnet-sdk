@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -349,6 +350,105 @@ func TestSecp256r1PublicKeyFromBytes(t *testing.T) {
 	sig, _ := key.Sign(message)
 	if !pubKey.Verify(message, sig) {
 		t.Error("verification with reconstructed key failed")
+	}
+}
+
+// TestSecp256r1PrivateKeyFromBytes_ScalarValidation tests the scalar range validation
+// for secp256r1 private keys. Valid scalars must be in range [1, n-1].
+func TestSecp256r1PrivateKeyFromBytes_ScalarValidation(t *testing.T) {
+	// P-256 curve order n
+	// n = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+	nHex := "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551"
+	nBytes, err := hex.DecodeString(nHex)
+	if err != nil {
+		t.Fatalf("failed to decode n: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		scalar  []byte
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "scalar = 0 (all zeros)",
+			scalar:  make([]byte, 32),
+			wantErr: true,
+			errMsg:  "scalar out of range",
+		},
+		{
+			name:    "scalar = n (curve order)",
+			scalar:  nBytes,
+			wantErr: true,
+			errMsg:  "scalar out of range",
+		},
+		{
+			name: "scalar = n + 1 (greater than n)",
+			scalar: func() []byte {
+				// n + 1 = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632552
+				nPlus1, _ := hex.DecodeString("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632552")
+				return nPlus1
+			}(),
+			wantErr: true,
+			errMsg:  "scalar out of range",
+		},
+		{
+			name: "scalar = n - 1 (valid, maximum allowed)",
+			scalar: func() []byte {
+				// n - 1 = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632550
+				nMinus1, _ := hex.DecodeString("FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632550")
+				return nMinus1
+			}(),
+			wantErr: false,
+		},
+		{
+			name:    "scalar = 1 (valid, minimum allowed)",
+			scalar:  append(make([]byte, 31), 1),
+			wantErr: false,
+		},
+		{
+			name: "scalar = 0xFF...FF (all bits set, greater than n)",
+			scalar: func() []byte {
+				b := make([]byte, 32)
+				for i := range b {
+					b[i] = 0xFF
+				}
+				return b
+			}(),
+			wantErr: true,
+			errMsg:  "scalar out of range",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := PrivateKeyFromBytes(AlgorithmSecp256r1, tt.scalar)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for %s, got nil", tt.name)
+					return
+				}
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("error message %q should contain %q", err.Error(), tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for %s: %v", tt.name, err)
+					return
+				}
+				// Verify the key is functional
+				message := []byte("test message")
+				sig, err := key.Sign(message)
+				if err != nil {
+					t.Errorf("valid key failed to sign: %v", err)
+					return
+				}
+				if !key.PublicKey().Verify(message, sig) {
+					t.Error("valid key's signature failed to verify")
+				}
+			}
+		})
 	}
 }
 
