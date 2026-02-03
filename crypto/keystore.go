@@ -84,6 +84,14 @@ type KeyEntry struct {
 
 	// Encrypted indicates whether PrivateKey is encrypted.
 	Encrypted bool `json:"encrypted"`
+
+	// Salt is the PBKDF2 salt used for key derivation (only set when Encrypted=true).
+	// MUST be at least MinSaltLength (16) bytes when present.
+	Salt []byte `json:"salt,omitempty"`
+
+	// Nonce is the AES-GCM nonce used for encryption (only set when Encrypted=true).
+	// MUST be exactly AESGCMNonceLength (12) bytes when present.
+	Nonce []byte `json:"nonce,omitempty"`
 }
 
 // Clone creates a deep copy of the KeyEntry.
@@ -106,6 +114,14 @@ func (e *KeyEntry) Clone() *KeyEntry {
 	if e.PublicKey != nil {
 		clone.PublicKey = make([]byte, len(e.PublicKey))
 		copy(clone.PublicKey, e.PublicKey)
+	}
+	if e.Salt != nil {
+		clone.Salt = make([]byte, len(e.Salt))
+		copy(clone.Salt, e.Salt)
+	}
+	if e.Nonce != nil {
+		clone.Nonce = make([]byte, len(e.Nonce))
+		copy(clone.Nonce, e.Nonce)
 	}
 	return clone
 }

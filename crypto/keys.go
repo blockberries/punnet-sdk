@@ -1,19 +1,12 @@
 package crypto
 
 import (
-	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
-	"math/big"
 	"runtime"
-
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 // Zeroize securely overwrites a byte slice with zeros.
@@ -160,250 +153,6 @@ func (k *ed25519PrivateKey) Zeroize() {
 	Zeroize(k.key)
 }
 
-// ============================================================================
-// secp256k1 Implementation (Bitcoin/Ethereum compatibility)
-// ============================================================================
-
-// secp256k1PublicKey implements PublicKey for secp256k1.
-// Uses 33-byte compressed format for storage efficiency.
-type secp256k1PublicKey struct {
-	key *secp256k1.PublicKey
-}
-
-// Bytes returns the 33-byte compressed public key.
-// Complexity: O(1). Allocates a new slice on each call.
-func (k *secp256k1PublicKey) Bytes() []byte {
-	return k.key.SerializeCompressed()
-}
-
-// Algorithm returns AlgorithmSecp256k1.
-func (k *secp256k1PublicKey) Algorithm() Algorithm {
-	return AlgorithmSecp256k1
-}
-
-// Verify verifies an ECDSA signature.
-// Expects 64-byte signature in (r || s) format.
-// NOTE: Does not enforce low-S normalization. Both (r, s) and (r, n-s)
-// are valid signatures for the same message. For consensus-critical use,
-// consider canonicalizing signatures at the protocol layer.
-// Complexity: O(1) for signature parsing + O(n) for hash computation.
-func (k *secp256k1PublicKey) Verify(data, signature []byte) bool {
-	if len(signature) != 64 {
-		return false
-	}
-
-	// Parse r and s from signature (32 bytes each)
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-
-	// Hash the data (secp256k1 signs hashes, not raw data)
-	hash := sha256.Sum256(data)
-
-	// Verify using standard ECDSA
-	pubKeyECDSA := k.key.ToECDSA()
-	return ecdsa.Verify(pubKeyECDSA, hash[:], r, s)
-}
-
-// Equals checks equality using constant-time comparison.
-// Complexity: O(n) where n is key length (33 bytes for compressed secp256k1).
-func (k *secp256k1PublicKey) Equals(other PublicKey) bool {
-	if other == nil || other.Algorithm() != AlgorithmSecp256k1 {
-		return false
-	}
-	return subtle.ConstantTimeCompare(k.Bytes(), other.Bytes()) == 1
-}
-
-// String returns Base64-encoded compressed public key.
-func (k *secp256k1PublicKey) String() string {
-	return base64.StdEncoding.EncodeToString(k.Bytes())
-}
-
-// secp256k1PrivateKey implements PrivateKey for secp256k1.
-type secp256k1PrivateKey struct {
-	key *secp256k1.PrivateKey
-}
-
-// Bytes returns the 32-byte scalar private key.
-// WARNING: Handle with care. Consider zeroing after use.
-// Complexity: O(1), zero allocations.
-func (k *secp256k1PrivateKey) Bytes() []byte {
-	return k.key.Serialize()
-}
-
-// Algorithm returns AlgorithmSecp256k1.
-func (k *secp256k1PrivateKey) Algorithm() Algorithm {
-	return AlgorithmSecp256k1
-}
-
-// PublicKey returns the corresponding public key.
-// Complexity: O(1) - derived from private key.
-func (k *secp256k1PrivateKey) PublicKey() PublicKey {
-	return &secp256k1PublicKey{key: k.key.PubKey()}
-}
-
-// Sign signs the given data using RFC 6979 deterministic k.
-// Returns 64-byte signature in (r || s) format.
-// Complexity: O(n) where n is data length for hashing.
-func (k *secp256k1PrivateKey) Sign(data []byte) ([]byte, error) {
-	// Hash the data (ECDSA signs hashes)
-	hash := sha256.Sum256(data)
-
-	// Sign using RFC 6979 deterministic k (built into dcrd/secp256k1)
-	sig := secp256k1ecdsa.Sign(k.key, hash[:])
-
-	// Extract r and s, pad to 32 bytes each
-	r := sig.R()
-	s := sig.S()
-
-	signature := make([]byte, 64)
-	rBytes := r.Bytes()
-	sBytes := s.Bytes()
-
-	// Pad r to 32 bytes (right-align)
-	copy(signature[32-len(rBytes):32], rBytes[:])
-	// Pad s to 32 bytes (right-align)
-	copy(signature[64-len(sBytes):64], sBytes[:])
-
-	return signature, nil
-}
-
-// Zeroize overwrites the private key with zeros.
-func (k *secp256k1PrivateKey) Zeroize() {
-	k.key.Zero()
-}
-
-// ============================================================================
-// secp256r1 (P-256) Implementation (HSM compatibility)
-// ============================================================================
-
-// secp256r1PublicKey implements PublicKey for secp256r1 (P-256).
-// Uses 33-byte compressed format for storage efficiency.
-type secp256r1PublicKey struct {
-	key *ecdsa.PublicKey
-}
-
-// Bytes returns the 33-byte compressed public key.
-// Compressed format: 0x02/0x03 prefix + 32-byte X coordinate.
-// Complexity: O(1).
-func (k *secp256r1PublicKey) Bytes() []byte {
-	return elliptic.MarshalCompressed(k.key.Curve, k.key.X, k.key.Y)
-}
-
-// Algorithm returns AlgorithmSecp256r1.
-func (k *secp256r1PublicKey) Algorithm() Algorithm {
-	return AlgorithmSecp256r1
-}
-
-// Verify verifies an ECDSA signature.
-// Expects 64-byte signature in (r || s) format.
-// NOTE: Does not enforce low-S normalization. Both (r, s) and (r, n-s)
-// are valid signatures for the same message. For consensus-critical use,
-// consider canonicalizing signatures at the protocol layer.
-// Complexity: O(1) for signature parsing + O(n) for hash computation.
-func (k *secp256r1PublicKey) Verify(data, signature []byte) bool {
-	if len(signature) != 64 {
-		return false
-	}
-
-	// Parse r and s from signature (32 bytes each)
-	r := new(big.Int).SetBytes(signature[:32])
-	s := new(big.Int).SetBytes(signature[32:])
-
-	// Hash the data (ECDSA signs hashes)
-	hash := sha256.Sum256(data)
-
-	return ecdsa.Verify(k.key, hash[:], r, s)
-}
-
-// Equals checks equality using constant-time comparison.
-// Complexity: O(n) where n is key length (33 bytes for compressed P-256).
-func (k *secp256r1PublicKey) Equals(other PublicKey) bool {
-	if other == nil || other.Algorithm() != AlgorithmSecp256r1 {
-		return false
-	}
-	return subtle.ConstantTimeCompare(k.Bytes(), other.Bytes()) == 1
-}
-
-// String returns Base64-encoded compressed public key.
-func (k *secp256r1PublicKey) String() string {
-	return base64.StdEncoding.EncodeToString(k.Bytes())
-}
-
-// secp256r1PrivateKey implements PrivateKey for secp256r1 (P-256).
-type secp256r1PrivateKey struct {
-	key *ecdsa.PrivateKey
-}
-
-// Bytes returns the 32-byte scalar private key.
-// WARNING: Handle with care. Consider zeroing after use.
-// Complexity: O(1).
-func (k *secp256r1PrivateKey) Bytes() []byte {
-	// Pad to 32 bytes (P-256 scalars are 32 bytes)
-	bytes := k.key.D.Bytes()
-	if len(bytes) < 32 {
-		padded := make([]byte, 32)
-		copy(padded[32-len(bytes):], bytes)
-		return padded
-	}
-	return bytes
-}
-
-// Algorithm returns AlgorithmSecp256r1.
-func (k *secp256r1PrivateKey) Algorithm() Algorithm {
-	return AlgorithmSecp256r1
-}
-
-// PublicKey returns the corresponding public key.
-// Complexity: O(1) - derived from private key.
-func (k *secp256r1PrivateKey) PublicKey() PublicKey {
-	return &secp256r1PublicKey{key: &k.key.PublicKey}
-}
-
-// Sign signs the given data using ECDSA with random nonces from crypto/rand.
-// NOTE: Unlike secp256k1, secp256r1 signatures are non-deterministic.
-// Each call produces a unique valid signature for the same message.
-// This is appropriate for HSM scenarios where hardware entropy is available.
-// Returns 64-byte signature in (r || s) format.
-// Complexity: O(n) where n is data length for hashing.
-func (k *secp256r1PrivateKey) Sign(data []byte) ([]byte, error) {
-	// Hash the data (ECDSA signs hashes)
-	hash := sha256.Sum256(data)
-
-	// Sign using random nonces from crypto/rand.
-	// Go's ecdsa.Sign does NOT use RFC 6979 - nonces are random.
-	r, s, err := ecdsa.Sign(rand.Reader, k.key, hash[:])
-	if err != nil {
-		return nil, fmt.Errorf("secp256r1 signing failed: %w", err)
-	}
-
-	// Encode as 64 bytes (r || s), each padded to 32 bytes
-	signature := make([]byte, 64)
-	rBytes := r.Bytes()
-	sBytes := s.Bytes()
-
-	// Pad r to 32 bytes (right-align)
-	copy(signature[32-len(rBytes):32], rBytes)
-	// Pad s to 32 bytes (right-align)
-	copy(signature[64-len(sBytes):64], sBytes)
-
-	return signature, nil
-}
-
-// Zeroize attempts to clear the private key from memory.
-// NOTE: Due to Go's big.Int implementation, complete zeroization cannot be
-// guaranteed. D.Bytes() returns a copy, so we zero that copy and then set
-// D to zero. The internal buffer of big.Int may still retain data until GC.
-// For high-security contexts, consider process isolation or HSM usage.
-func (k *secp256r1PrivateKey) Zeroize() {
-	if k.key != nil && k.key.D != nil {
-		// Best effort: zero a copy of the bytes (D.Bytes() allocates)
-		bytes := k.key.D.Bytes()
-		Zeroize(bytes)
-		// Set D to zero to clear the semantic value
-		k.key.D.SetInt64(0)
-	}
-}
-
 // GeneratePrivateKey generates a new private key for the given algorithm.
 // Complexity: O(1) for key generation, uses crypto/rand.
 func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
@@ -416,18 +165,10 @@ func GeneratePrivateKey(algo Algorithm) (PrivateKey, error) {
 		return &ed25519PrivateKey{key: priv}, nil
 
 	case AlgorithmSecp256k1:
-		privKey, err := secp256k1.GeneratePrivateKey()
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate secp256k1 key: %w", err)
-		}
-		return &secp256k1PrivateKey{key: privKey}, nil
+		return generateSecp256k1PrivateKey()
 
 	case AlgorithmSecp256r1:
-		privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate secp256r1 key: %w", err)
-		}
-		return &secp256r1PrivateKey{key: privKey}, nil
+		return generateSecp256r1PrivateKey()
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
@@ -450,39 +191,10 @@ func PrivateKeyFromBytes(algo Algorithm, data []byte) (PrivateKey, error) {
 		return &ed25519PrivateKey{key: key}, nil
 
 	case AlgorithmSecp256k1:
-		if len(data) != 32 {
-			return nil, fmt.Errorf("invalid secp256k1 private key size: expected 32, got %d", len(data))
-		}
-		// Make a copy to prevent external mutation
-		privKey := secp256k1.PrivKeyFromBytes(data)
-		return &secp256k1PrivateKey{key: privKey}, nil
+		return secp256k1PrivateKeyFromBytes(data)
 
 	case AlgorithmSecp256r1:
-		if len(data) != 32 {
-			return nil, fmt.Errorf("invalid secp256r1 private key size: expected 32, got %d", len(data))
-		}
-		// Make a copy and construct the key
-		d := new(big.Int).SetBytes(data)
-		curve := elliptic.P256()
-
-		// Validate scalar is in range [1, n-1]
-		// d == 0 would produce identity point (invalid)
-		// d >= n is invalid for the curve
-		n := curve.Params().N
-		if d.Sign() == 0 || d.Cmp(n) >= 0 {
-			return nil, fmt.Errorf("invalid secp256r1 private key: scalar out of range [1, n-1]")
-		}
-
-		x, y := curve.ScalarBaseMult(data)
-		privKey := &ecdsa.PrivateKey{
-			PublicKey: ecdsa.PublicKey{
-				Curve: curve,
-				X:     x,
-				Y:     y,
-			},
-			D: d,
-		}
-		return &secp256r1PrivateKey{key: privKey}, nil
+		return secp256r1PrivateKeyFromBytes(data)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
@@ -490,7 +202,6 @@ func PrivateKeyFromBytes(algo Algorithm, data []byte) (PrivateKey, error) {
 }
 
 // PublicKeyFromBytes creates a public key from raw bytes.
-// Expects compressed format (33 bytes) for secp256k1/secp256r1.
 // Complexity: O(n) where n is byte length for validation.
 func PublicKeyFromBytes(algo Algorithm, data []byte) (PublicKey, error) {
 	switch algo {
@@ -505,29 +216,10 @@ func PublicKeyFromBytes(algo Algorithm, data []byte) (PublicKey, error) {
 		return &ed25519PublicKey{key: key}, nil
 
 	case AlgorithmSecp256k1:
-		if len(data) != 33 {
-			return nil, fmt.Errorf("invalid secp256k1 public key size: expected 33 (compressed), got %d", len(data))
-		}
-		pubKey, err := secp256k1.ParsePubKey(data)
-		if err != nil {
-			return nil, fmt.Errorf("invalid secp256k1 public key: %w", err)
-		}
-		return &secp256k1PublicKey{key: pubKey}, nil
+		return secp256k1PublicKeyFromBytes(data)
 
 	case AlgorithmSecp256r1:
-		if len(data) != 33 {
-			return nil, fmt.Errorf("invalid secp256r1 public key size: expected 33 (compressed), got %d", len(data))
-		}
-		x, y := elliptic.UnmarshalCompressed(elliptic.P256(), data)
-		if x == nil {
-			return nil, fmt.Errorf("invalid secp256r1 public key: failed to decompress")
-		}
-		pubKey := &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     x,
-			Y:     y,
-		}
-		return &secp256r1PublicKey{key: pubKey}, nil
+		return secp256r1PublicKeyFromBytes(data)
 
 	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algo)
