@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
@@ -700,6 +701,242 @@ func FuzzSignDocBoundaryValues(f *testing.F) {
 		}
 		if uint64(sd2.Nonce) != value {
 			t.Errorf("nonce not preserved: %d -> %d", value, uint64(sd2.Nonce))
+		}
+	})
+}
+
+// =============================================================================
+// FUZZ TEST: Concurrent SignDoc Parsing
+// =============================================================================
+// IDENTIFIED BY: The Tinkerer in PR #83 review
+// RATIONALE: In a real P2P scenario, SignDocs are parsed from multiple peers
+// simultaneously. This test verifies that the JSON parser has no race conditions
+// when the same input bytes are parsed concurrently.
+//
+// Run with: go test -fuzz=FuzzConcurrentParseSignDoc -fuzztime=60s -race ./types/...
+//
+// SECURITY INVARIANT: Concurrent parsing of identical bytes must be thread-safe.
+// SAFETY: No shared mutable state should exist in the parsing path.
+// LIVENESS: All goroutines must complete without deadlock.
+
+// FuzzConcurrentParseSignDoc tests that ParseSignDoc is thread-safe when called
+// concurrently with the same input data.
+//
+// INVARIANT: For any input data, concurrent calls to ParseSignDoc must:
+// 1. Not cause data races (verified with -race flag)
+// 2. Either all succeed with equivalent results, or all fail with errors
+// 3. Not panic in any goroutine
+func FuzzConcurrentParseSignDoc(f *testing.F) {
+	// Seed corpus: valid SignDocs that should parse successfully
+	f.Add([]byte(`{"version":"1","chain_id":"test","account":"alice","account_sequence":"1","messages":[{"type":"/msg","data":{}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`))
+	f.Add([]byte(`{"version":"1","chain_id":"punnet-mainnet-1","account":"bob","account_sequence":"42","messages":[{"type":"/punnet.bank.v1.MsgSend","data":{"from":"bob","to":"alice","amount":"100"}}],"nonce":"10","memo":"hello","fee":{"amount":[{"denom":"uatom","amount":"5000"}],"gas_limit":"200000"},"fee_slippage":{"numerator":"1","denominator":"100"}}`))
+
+	// Seed corpus: edge cases and adversarial inputs
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`null`))
+	f.Add([]byte(`[]`))
+	f.Add([]byte(`{"version":"1"}`))
+	f.Add([]byte(`not json at all`))
+	f.Add([]byte{0x00, 0x01, 0x02, 0x03}) // Binary garbage
+
+	// Unicode and special characters
+	f.Add([]byte(`{"version":"1","chain_id":"日本語","account":"alice","account_sequence":"1","messages":[{"type":"/msg","data":{}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`))
+
+	// Large input
+	largeMessages := `{"version":"1","chain_id":"test","account":"alice","account_sequence":"1","messages":[`
+	for i := 0; i < 50; i++ {
+		if i > 0 {
+			largeMessages += ","
+		}
+		largeMessages += `{"type":"/msg","data":{}}`
+	}
+	largeMessages += `],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`
+	f.Add([]byte(largeMessages))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// INVARIANT: Concurrent parsing must be thread-safe
+		// TEST METHODOLOGY: Parse the same data from multiple goroutines simultaneously
+		// and verify that all results are consistent (either all succeed or all fail)
+
+		const concurrency = 10
+		var wg sync.WaitGroup
+
+		// Collect results from all goroutines for consistency checking
+		type parseResult struct {
+			sd  *SignDoc
+			err error
+		}
+		results := make([]parseResult, concurrency)
+
+		// Launch concurrent parsers
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+
+				// SECURITY: Must not panic on any input
+				// Recovery is intentionally NOT used here - we want panics to fail the test
+				sd, err := ParseSignDoc(data)
+				results[idx] = parseResult{sd: sd, err: err}
+			}(i)
+		}
+
+		// Wait for all parsers to complete
+		// LIVENESS: If this blocks forever, the test will timeout (indicating a deadlock)
+		wg.Wait()
+
+		// INVARIANT: All results must be consistent
+		// Either all succeed with equivalent SignDocs, or all fail
+		firstErr := results[0].err
+		for i := 1; i < concurrency; i++ {
+			thisErr := results[i].err
+
+			// Check error consistency
+			if (firstErr == nil) != (thisErr == nil) {
+				t.Errorf("inconsistent error results: goroutine 0 err=%v, goroutine %d err=%v",
+					firstErr, i, thisErr)
+				return
+			}
+		}
+
+		// If parsing succeeded, verify all results are equivalent
+		if firstErr == nil {
+			firstSD := results[0].sd
+			firstJSON, err := firstSD.ToJSON()
+			if err != nil {
+				// ToJSON failing after successful parse would indicate a bug
+				t.Errorf("ToJSON failed on successfully parsed SignDoc: %v", err)
+				return
+			}
+
+			for i := 1; i < concurrency; i++ {
+				thisSD := results[i].sd
+				thisJSON, err := thisSD.ToJSON()
+				if err != nil {
+					t.Errorf("goroutine %d: ToJSON failed on successfully parsed SignDoc: %v", i, err)
+					return
+				}
+
+				// INVARIANT: All parsers must produce identical canonical JSON
+				if !bytes.Equal(firstJSON, thisJSON) {
+					t.Errorf("inconsistent parse results: goroutine 0 produced different JSON than goroutine %d", i)
+					return
+				}
+			}
+		}
+	})
+}
+
+// FuzzConcurrentParseSignDocHighContention tests ParseSignDoc under higher
+// concurrency to stress-test for race conditions.
+//
+// RATIONALE: The default 10 goroutines may not trigger certain race conditions
+// that only manifest under high contention. This test uses GOMAXPROCS * 4 goroutines
+// to increase the likelihood of exposing timing-dependent bugs.
+//
+// Run with: go test -fuzz=FuzzConcurrentParseSignDocHighContention -fuzztime=60s -race ./types/...
+func FuzzConcurrentParseSignDocHighContention(f *testing.F) {
+	// Seed with valid JSON that will successfully parse
+	f.Add([]byte(`{"version":"1","chain_id":"test","account":"alice","account_sequence":"1","messages":[{"type":"/msg","data":{}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`))
+
+	// Seed with complex nested data
+	f.Add([]byte(`{"version":"1","chain_id":"complex-chain","account":"user123","account_sequence":"999","messages":[{"type":"/bank.send","data":{"from":"user123","to":"user456","coins":[{"denom":"uatom","amount":"1000000"}]}},{"type":"/staking.delegate","data":{"validator":"cosmosvaloper1...","amount":"500000"}}],"nonce":"42","memo":"complex transaction with multiple messages","fee":{"amount":[{"denom":"uatom","amount":"5000"},{"denom":"stake","amount":"100"}],"gas_limit":"200000"},"fee_slippage":{"numerator":"5","denominator":"100"}}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		// Higher concurrency for stress testing
+		const concurrency = 50
+		var wg sync.WaitGroup
+
+		// INVARIANT: No goroutine should panic
+		// INVARIANT: No data races should occur (verified with -race flag)
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Parse and discard result - we're testing for races, not correctness
+				ParseSignDoc(data)
+			}()
+		}
+
+		wg.Wait()
+	})
+}
+
+// FuzzConcurrentParseAndSerialize tests that parsing followed by serialization
+// is thread-safe when done concurrently.
+//
+// RATIONALE: A common pattern is to parse a SignDoc, modify it, and re-serialize.
+// This test verifies that the full round-trip is thread-safe.
+//
+// INVARIANT: Concurrent parse -> serialize cycles must not interfere with each other.
+func FuzzConcurrentParseAndSerialize(f *testing.F) {
+	f.Add([]byte(`{"version":"1","chain_id":"test","account":"alice","account_sequence":"1","messages":[{"type":"/msg","data":{}}],"nonce":"1","fee":{"amount":[],"gas_limit":"0"},"fee_slippage":{"numerator":"0","denominator":"1"}}`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		const concurrency = 10
+		var wg sync.WaitGroup
+
+		// Collect serialization results
+		serializedResults := make([][]byte, concurrency)
+		hashResults := make([][]byte, concurrency)
+
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+
+				sd, err := ParseSignDoc(data)
+				if err != nil {
+					return
+				}
+
+				// Serialize back to JSON
+				jsonBytes, err := sd.ToJSON()
+				if err != nil {
+					return
+				}
+				serializedResults[idx] = jsonBytes
+
+				// Also compute sign bytes (hash)
+				hashBytes, err := sd.GetSignBytes()
+				if err != nil {
+					return
+				}
+				hashResults[idx] = hashBytes
+			}(i)
+		}
+
+		wg.Wait()
+
+		// Find first non-nil result
+		var firstJSON []byte
+		var firstHash []byte
+		for i := 0; i < concurrency; i++ {
+			if serializedResults[i] != nil {
+				firstJSON = serializedResults[i]
+				firstHash = hashResults[i]
+				break
+			}
+		}
+
+		if firstJSON == nil {
+			// All parsing failed - that's okay for invalid input
+			return
+		}
+
+		// INVARIANT: All successful serializations must be identical
+		for i := 0; i < concurrency; i++ {
+			if serializedResults[i] == nil {
+				continue
+			}
+			if !bytes.Equal(firstJSON, serializedResults[i]) {
+				t.Error("inconsistent JSON serialization across goroutines")
+				return
+			}
+			if !bytes.Equal(firstHash, hashResults[i]) {
+				t.Error("inconsistent hash computation across goroutines")
+				return
+			}
 		}
 	})
 }
