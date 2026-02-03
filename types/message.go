@@ -30,6 +30,13 @@ type Message interface {
 // SECURITY: Including full message content prevents signature reuse attacks where
 // an attacker might try to reuse a signature with different message parameters
 // that happen to have the same signers.
+//
+// TESTING: Use punnettesting.AssertSignDocDataDeterminism to validate implementations:
+//
+//	func TestMyMessage_SignDocDataDeterminism(t *testing.T) {
+//	    msg := &MyMessage{From: "alice", To: "bob", Amount: 100}
+//	    punnettesting.AssertSignDocDataDeterminism(t, msg, 100)
+//	}
 type SignDocSerializable interface {
 	// SignDocData returns the canonical JSON representation of this message
 	// for inclusion in SignDoc.
