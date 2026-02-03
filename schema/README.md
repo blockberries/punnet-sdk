@@ -153,7 +153,7 @@ Current codebase uses JSON for serialization. Migration steps:
 1. Generate Cramberry code from schemas
 2. Implement conversion between Go types and generated types
 3. Add `Marshal()`/`Unmarshal()` methods to existing types
-4. Update `Transaction.GetSignBytes()` to use Cramberry
+4. Update `SignDoc.GetSignBytes()` to use Cramberry
 5. Update store serializers to use Cramberry
 6. Add round-trip tests
 7. Performance benchmarks
@@ -162,7 +162,7 @@ Current codebase uses JSON for serialization. Migration steps:
 
 These must use Cramberry for consensus determinism:
 
-- `Transaction.GetSignBytes()` - signature verification
+- `SignDoc.GetSignBytes()` - signature verification (canonical approach with chainID protection)
 - `Transaction.Hash()` - transaction identification
 - Store serialization - state commitment
 - Message encoding in transactions
@@ -228,7 +228,7 @@ Benefits:
 - [ ] Integrate Cramberry compiler into build
 - [ ] Generate Go code from schemas
 - [ ] Implement conversion helpers
-- [ ] Migrate Transaction.GetSignBytes()
+- [x] ~~Migrate Transaction.GetSignBytes()~~ (removed - use SignDoc.GetSignBytes())
 - [ ] Migrate store serialization
 - [ ] Add round-trip tests
 - [ ] Add determinism tests
