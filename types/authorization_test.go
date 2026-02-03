@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -436,4 +437,150 @@ func TestAuthorization_MaxRecursionDepth(t *testing.T) {
 	deepestAccount := accounts[MaxRecursionDepth+2]
 	err := currentAuth.VerifyAuthorization(deepestAccount, message, getter)
 	assert.ErrorIs(t, err, ErrMaxRecursionDepth)
+}
+
+// TestAuthorization_DuplicateSignatureCountingAttack tests that duplicate signatures
+// from the same public key are not counted multiple times toward the threshold.
+//
+// SECURITY TEST: This verifies protection against Issue #30 where an attacker with
+// a single weight-1 key could submit n copies of their signature to reach any threshold <= n.
+//
+// Attack scenario:
+// 1. Account has threshold=3, with one key having weight=1
+// 2. Attacker has that one key
+// 3. Attacker creates authorization with 3 identical signatures from their key
+// 4. Without fix: Each signature adds weight=1, total=3, threshold met (ATTACK SUCCESS)
+// 5. With fix: Only first signature counted, total=1 < 3 (ATTACK BLOCKED)
+func TestAuthorization_DuplicateSignatureCountingAttack(t *testing.T) {
+	// Generate a single key pair
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	// Create account with threshold=3 but only one key with weight=1
+	// This simulates a multi-sig where we need 3 keys to sign,
+	// but attacker only has 1 key
+	account := &Account{
+		Name: "multisig-account",
+		Authority: Authority{
+			Threshold:      3,
+			KeyWeights:     map[string]uint64{string(pub): 1},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 0,
+	}
+
+	// Create message and sign it
+	message := []byte("steal all the funds")
+	sig := ed25519.Sign(priv, message)
+
+	// ATTACK: Submit the same valid signature THREE times
+	// Without protection, this would count as weight=3 and meet threshold
+	auth := &Authorization{
+		Signatures: []Signature{
+			{PubKey: pub, Signature: sig},
+			{PubKey: pub, Signature: sig}, // Duplicate!
+			{PubKey: pub, Signature: sig}, // Duplicate!
+		},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	// EXPECTED: Verification MUST fail - either with ErrDuplicateSignature
+	// (if we explicitly detect duplicates) or ErrInsufficientWeight
+	// (if we silently deduplicate and don't meet threshold).
+	// Either way, the attack MUST be blocked.
+	err = auth.VerifyAuthorization(account, message, getter)
+	assert.Error(t, err, "SECURITY: Duplicate signatures attack must be blocked")
+
+	// Verify it's one of the expected security errors
+	isDuplicateError := errors.Is(err, ErrDuplicateSignature)
+	isInsufficientWeight := errors.Is(err, ErrInsufficientWeight)
+	assert.True(t, isDuplicateError || isInsufficientWeight,
+		"Expected ErrDuplicateSignature or ErrInsufficientWeight, got: %v", err)
+}
+
+// TestAuthorization_DuplicateSignatureDetection tests that submitting duplicate
+// signatures produces an explicit error indicating the duplication.
+func TestAuthorization_DuplicateSignatureDetection(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	account := &Account{
+		Name: "test-account",
+		Authority: Authority{
+			Threshold:      1,
+			KeyWeights:     map[string]uint64{string(pub): 1},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 0,
+	}
+
+	message := []byte("test message")
+	sig := ed25519.Sign(priv, message)
+
+	// Submit duplicate signatures for same key
+	auth := &Authorization{
+		Signatures: []Signature{
+			{PubKey: pub, Signature: sig},
+			{PubKey: pub, Signature: sig}, // Duplicate
+		},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	// Should get duplicate signature error
+	err = auth.VerifyAuthorization(account, message, getter)
+	assert.ErrorIs(t, err, ErrDuplicateSignature,
+		"Duplicate signatures should produce explicit error")
+}
+
+// TestAuthorization_MultipleValidKeysNotDuplicate verifies that different valid
+// signatures from different keys are counted correctly (not mistakenly deduplicated).
+func TestAuthorization_MultipleValidKeysNotDuplicate(t *testing.T) {
+	// Generate three different key pairs
+	pub1, priv1, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	pub2, priv2, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	pub3, priv3, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+
+	// Create account with threshold=3, three keys each with weight=1
+	account := &Account{
+		Name: "real-multisig",
+		Authority: Authority{
+			Threshold: 3,
+			KeyWeights: map[string]uint64{
+				string(pub1): 1,
+				string(pub2): 1,
+				string(pub3): 1,
+			},
+			AccountWeights: make(map[AccountName]uint64),
+		},
+		Nonce: 0,
+	}
+
+	message := []byte("legitimate transaction")
+
+	// Sign with all three DIFFERENT keys
+	sig1 := ed25519.Sign(priv1, message)
+	sig2 := ed25519.Sign(priv2, message)
+	sig3 := ed25519.Sign(priv3, message)
+
+	auth := &Authorization{
+		Signatures: []Signature{
+			{PubKey: pub1, Signature: sig1},
+			{PubKey: pub2, Signature: sig2},
+			{PubKey: pub3, Signature: sig3},
+		},
+		AccountAuthorizations: make(map[AccountName]*Authorization),
+	}
+
+	getter := newMockAccountGetter()
+
+	// MUST succeed - three different keys meeting threshold=3
+	err = auth.VerifyAuthorization(account, message, getter)
+	assert.NoError(t, err, "Three different valid signatures should meet threshold=3")
 }
