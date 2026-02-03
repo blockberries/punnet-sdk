@@ -11,12 +11,12 @@ import (
 
 // testMessage is a simple message implementation for testing
 type testMessage struct {
-	MsgType string      `json:"type"`
+	MsgType string        `json:"type"`
 	Signers []AccountName `json:"signers"`
 }
 
-func (m *testMessage) Type() string           { return m.MsgType }
-func (m *testMessage) ValidateBasic() error   { return nil }
+func (m *testMessage) Type() string             { return m.MsgType }
+func (m *testMessage) ValidateBasic() error     { return nil }
 func (m *testMessage) GetSigners() []AccountName { return m.Signers }
 
 func TestTransaction_ToSignDoc(t *testing.T) {
@@ -148,7 +148,7 @@ func TestTransaction_VerifyAuthorization_InvalidNonce(t *testing.T) {
 	sig := ed25519.Sign(priv, signBytes)
 
 	tx.Authorization = &Authorization{
-		Signatures: []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: sig}},
+		Signatures:            []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: sig}},
 		AccountAuthorizations: make(map[AccountName]*Authorization),
 	}
 
@@ -194,7 +194,7 @@ func TestTransaction_VerifyAuthorization_InvalidSignature(t *testing.T) {
 	wrongSig := ed25519.Sign(wrongPriv, signBytes)
 
 	tx.Authorization = &Authorization{
-		Signatures: []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: wrongSig}},
+		Signatures:            []Signature{{Algorithm: AlgorithmEd25519, PubKey: pub, Signature: wrongSig}},
 		AccountAuthorizations: make(map[AccountName]*Authorization),
 	}
 

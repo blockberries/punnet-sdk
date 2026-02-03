@@ -241,10 +241,10 @@ func TestSignDoc_Roundtrip(t *testing.T) {
 func TestSortedJSONObject(t *testing.T) {
 	// Test that keys are sorted alphabetically
 	obj := sortedJSONObject{
-		"zebra":    1,
-		"apple":    2,
-		"mango":    3,
-		"banana":   4,
+		"zebra":  1,
+		"apple":  2,
+		"mango":  3,
+		"banana": 4,
 	}
 
 	jsonBytes, err := json.Marshal(obj)
