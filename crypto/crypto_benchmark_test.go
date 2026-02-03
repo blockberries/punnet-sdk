@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/rand"
 	"fmt"
+	"math/big"
 	"testing"
 )
 
@@ -514,4 +515,75 @@ func BenchmarkVerifyEd25519_WrongData(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = pubKey.Verify(data2, signature)
 	}
+}
+
+// ============================================================================
+// Low-S Normalization Benchmarks
+// ============================================================================
+
+// BenchmarkNormalizeLowS_NoChange measures overhead when s is already low-S.
+// Expected: <10ns per operation (simple comparison).
+func BenchmarkNormalizeLowS_NoChange(b *testing.B) {
+	n := p256Order() // P-256 curve order
+	halfN := new(big.Int).Rsh(n, 1)
+	s := new(big.Int).Sub(halfN, big.NewInt(1)) // Already low-S
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = normalizeLowS(s, n)
+	}
+}
+
+// BenchmarkNormalizeLowS_NeedsNormalization measures overhead when s > n/2.
+// Expected: <50ns per operation (comparison + subtraction).
+func BenchmarkNormalizeLowS_NeedsNormalization(b *testing.B) {
+	n := p256Order() // P-256 curve order
+	halfN := new(big.Int).Rsh(n, 1)
+	s := new(big.Int).Add(halfN, big.NewInt(1)) // High-S, needs normalization
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = normalizeLowS(s, n)
+	}
+}
+
+// BenchmarkIsLowS measures IsLowS check overhead.
+// Expected: <20ns per operation.
+func BenchmarkIsLowS(b *testing.B) {
+	n := p256Order()
+	sig := make([]byte, 64)
+	sig[63] = 0x01 // Low-S signature
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = IsLowS(sig, n)
+	}
+}
+
+// BenchmarkSignSecp256r1WithLowS measures total signing time including low-S normalization.
+// The overhead from normalization should be negligible (<1%) compared to ECDSA signing.
+func BenchmarkSignSecp256r1WithLowS(b *testing.B) {
+	key, err := GeneratePrivateKey(AlgorithmSecp256r1)
+	if err != nil {
+		b.Fatal(err)
+	}
+	data := generateTestData(32)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := key.Sign(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// p256Order returns the P-256 curve order for benchmarks.
+func p256Order() *big.Int {
+	n, _ := new(big.Int).SetString("115792089210356248762697446949407573529996955224135760342422259061068512044369", 10)
+	return n
 }
