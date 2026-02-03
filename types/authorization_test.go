@@ -251,7 +251,7 @@ func TestAuthorization_DelegatedAuthorization(t *testing.T) {
 	alice := &Account{
 		Name: "alice",
 		Authority: Authority{
-			Threshold: 1,
+			Threshold:  1,
 			KeyWeights: map[string]uint64{string(alicePub): 1},
 			AccountWeights: map[AccountName]uint64{
 				"bob": 1,
