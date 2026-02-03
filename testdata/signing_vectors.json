@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "generated": "2026-02-03T08:52:27.80547Z",
+  "generated": "2026-02-03T13:10:51.983274Z",
   "description": "Cross-implementation test vectors for Punnet SDK signing system",
   "vectors": [
     {
@@ -586,6 +586,210 @@
             "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
             "signature_hex": "fdd34a1f7644e01cb9e7dce923fb96fc0ea1db5b16df2e84601689c6f34f530e095b55468e23e2e7b8425dfd72b50085e57a6de4843f501f8a32edfe07116c00"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil_vs_empty_memo_string",
+      "description": "Tests empty string memo serialization.\nCRITICAL: Implementations MUST normalize null/nil/undefined memo to empty string \"\".\nThe canonical JSON MUST contain \"memo\":\"\" (not omitted, not null).\nDifferent representations that MUST all produce this output:\n- Go: memo = \"\" or memo = \"\"\n- JavaScript: memo = \"\" or memo = null or memo = undefined\n- Rust: memo = String::new() or memo = None (Option\u003cString\u003e)\n- Python: memo = \"\" or memo = None",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "nil-vs-empty-test",
+        "account": "tester",
+        "account_sequence": "1",
+        "nonce": "1",
+        "messages": [
+          {
+            "type": "/test.NilVsEmpty",
+            "data": {
+              "field": "memo_test"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"nil-vs-empty-test\",\"account\":\"tester\",\"account_sequence\":\"1\",\"messages\":[{\"type\":\"/test.NilVsEmpty\",\"data\":{\"field\":\"memo_test\"}}],\"nonce\":\"1\",\"memo\":\"\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "5414e37abb19692ab2f6063228a1907ef96e80258ac3590fc169a80237b62042",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "59d68be1ea3f95610628ce751152647dd089cd78ef93bbc396943121042bca589f4b510d5e8e9d05a7f6f8fe8b8313198098a489d7789f67ba0edd6b5cb9690f"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil_vs_empty_fee_amount",
+      "description": "Tests empty fee amount array serialization.\nCRITICAL: Implementations MUST normalize null/nil fee amounts to empty array [].\nThe canonical JSON MUST contain \"amount\":[] (not omitted, not null).\nDifferent representations that MUST all produce this output:\n- Go: Amount = []SignDocCoin{} or Amount = nil\n- JavaScript: amount = [] or amount = null or amount = undefined\n- Rust: amount = Vec::new() or amount = None (if Option\u003cVec\u003cCoin\u003e\u003e)\n- Python: amount = [] or amount = None",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "nil-vs-empty-test",
+        "account": "tester",
+        "account_sequence": "2",
+        "nonce": "2",
+        "memo": "fee amount test",
+        "messages": [
+          {
+            "type": "/test.NilVsEmpty",
+            "data": {
+              "field": "fee_test"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"nil-vs-empty-test\",\"account\":\"tester\",\"account_sequence\":\"2\",\"messages\":[{\"type\":\"/test.NilVsEmpty\",\"data\":{\"field\":\"fee_test\"}}],\"nonce\":\"2\",\"memo\":\"fee amount test\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "88c6d6895b827f511d4fe22ca3304e47b5558b65ea656894b16814f5035bfda1",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "c7e57fc236dc743330ccb4150a130696b2c2e88349129d4855d0c98b77aead4b7f4e20b837e44c2c9d62b80a29b1706416ef2f5a9273ce4e74971d17e864ed09"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil_vs_empty_combined",
+      "description": "Tests both empty memo AND empty fee amounts together.\nThis validates that implementations correctly handle multiple nil/empty fields.\nExpected canonical JSON contains both \"memo\":\"\" AND \"amount\":[]",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "nil-vs-empty-test",
+        "account": "tester",
+        "account_sequence": "3",
+        "nonce": "3",
+        "messages": [
+          {
+            "type": "/test.NilVsEmpty",
+            "data": {
+              "field": "combined_test"
+            }
+          }
+        ],
+        "fee": {
+          "amount": [],
+          "gas_limit": "0"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"nil-vs-empty-test\",\"account\":\"tester\",\"account_sequence\":\"3\",\"messages\":[{\"type\":\"/test.NilVsEmpty\",\"data\":{\"field\":\"combined_test\"}}],\"nonce\":\"3\",\"memo\":\"\",\"fee\":{\"amount\":[],\"gas_limit\":\"0\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "efa53ad6b149055a5b8512a0ba1ad8a7cd966993aa13bf8528188c7538ef9c68",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "f4f1014ec01d284fed89da9a525bdfd830a2b9a0e89afa46a109a64cd02c36469786136dc33758a1aab3b679c4d760b604490c0abf6fd4c2abf946c7b665eb0f"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil_vs_empty_message_data_object",
+      "description": "Tests empty object {} as message data.\nEmpty object is a valid message data value and MUST serialize as \"data\":{}\nThis is distinct from null message data (see nil_vs_empty_message_data_null).",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "nil-vs-empty-test",
+        "account": "tester",
+        "account_sequence": "4",
+        "nonce": "4",
+        "memo": "empty message data test",
+        "messages": [
+          {
+            "type": "/test.EmptyData",
+            "data": {}
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"nil-vs-empty-test\",\"account\":\"tester\",\"account_sequence\":\"4\",\"messages\":[{\"type\":\"/test.EmptyData\",\"data\":{}}],\"nonce\":\"4\",\"memo\":\"empty message data test\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "468e33cbb62c06808816488f88da432a5bdc15ff857f5c64648beda68ba0250e",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "d0b4d5d6f9ba474db266e78c7c7df0c6dae5ef3ec2c98310e95498c22dfba334107a53e20a084e03218dca646ae9ed42894a9fa9d15728f62c732fb0d644e803"
+          }
+        }
+      }
+    },
+    {
+      "name": "nil_vs_empty_message_data_null",
+      "description": "Tests null as message data.\nWhen message data is null/nil, it MUST serialize as \"data\":null\nThis is distinct from empty object {} (see nil_vs_empty_message_data_object).\nSECURITY: Implementations must distinguish between null and empty object\nas they produce different signatures.",
+      "category": "edge_case",
+      "input": {
+        "chain_id": "nil-vs-empty-test",
+        "account": "tester",
+        "account_sequence": "5",
+        "nonce": "5",
+        "memo": "null message data test",
+        "messages": [
+          {
+            "type": "/test.NullData",
+            "data": null
+          }
+        ],
+        "fee": {
+          "amount": [
+            {
+              "denom": "stake",
+              "amount": "100"
+            }
+          ],
+          "gas_limit": "50000"
+        },
+        "fee_slippage": {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      },
+      "expected": {
+        "sign_doc_json": "{\"version\":\"1\",\"chain_id\":\"nil-vs-empty-test\",\"account\":\"tester\",\"account_sequence\":\"5\",\"messages\":[{\"type\":\"/test.NullData\",\"data\":null}],\"nonce\":\"5\",\"memo\":\"null message data test\",\"fee\":{\"amount\":[{\"denom\":\"stake\",\"amount\":\"100\"}],\"gas_limit\":\"50000\"},\"fee_slippage\":{\"numerator\":\"0\",\"denominator\":\"1\"}}",
+        "sign_bytes_hex": "71f7592ef60ea43ad000a874199cb7de3c240ffab647012500fa295866f59feb",
+        "signatures": {
+          "ed25519": {
+            "private_key_hex": "83d296ed1daa7af61dff0bc6f585237d63133fd15c6acd863a1118313d8b5c89c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "public_key_hex": "c0db51f52b5f8f655a165d9d936f91a078ef92200787ef95e8d17c207379ee94",
+            "signature_hex": "1760d6b4fed92b159191b6ab5212db376115123a1e850912c3174978a3386afa93c36b1762ce9b76556cf8eb98a37b44729af5836a87d43a905bb8a30752a802"
           }
         }
       }

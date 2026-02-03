@@ -282,6 +282,88 @@ Test boundary conditions:
 - Unicode characters
 - Special characters (escapes, quotes)
 - Minimal valid transactions
+- Nil vs empty value serialization (see below)
+
+## Nil vs Empty Value Handling
+
+**CRITICAL**: Different programming languages may serialize null/nil vs empty values differently. To ensure cross-implementation compatibility, the Punnet SDK defines canonical serialization rules for these cases.
+
+### Memo Field
+
+| Input Representation | Canonical Serialization | Notes |
+|---------------------|------------------------|-------|
+| `null` / `nil` / `None` | `"memo":""` | Absent memo is empty string |
+| `undefined` (JS) | `"memo":""` | Absent memo is empty string |
+| `""` (empty string) | `"memo":""` | Empty string is preserved |
+| `"text"` (non-empty) | `"memo":"text"` | Non-empty is preserved |
+
+**Rule**: Implementations MUST normalize null/nil/undefined memo values to empty string `""`. The memo field MUST always be present in the canonical JSON.
+
+### Fee Amount Field
+
+| Input Representation | Canonical Serialization | Notes |
+|---------------------|------------------------|-------|
+| `null` / `nil` / `None` | `"amount":[]` | Absent amounts is empty array |
+| `undefined` (JS) | `"amount":[]` | Absent amounts is empty array |
+| `[]` (empty array) | `"amount":[]` | Empty array is preserved |
+| `[{...}]` (with coins) | `"amount":[{...}]` | Non-empty is preserved |
+
+**Rule**: Implementations MUST normalize null/nil/undefined fee amounts to empty array `[]`. The amount field MUST always be present in the canonical JSON.
+
+### Message Data Field
+
+| Input Representation | Canonical Serialization | Notes |
+|---------------------|------------------------|-------|
+| `null` / `nil` / `None` | `"data":null` | Null is **preserved** |
+| `{}` (empty object) | `"data":{}` | Empty object is **preserved** |
+
+**SECURITY**: Unlike memo and fee amounts, message data `null` and `{}` are **different values** that produce **different signatures**. Implementations MUST distinguish between:
+- `"data":null` - represents absence of data
+- `"data":{}` - represents an empty data object
+
+This distinction is intentional because message semantics may differ between "no data provided" vs "empty data provided".
+
+### Test Vectors
+
+The following test vectors verify correct nil vs empty handling:
+
+| Vector Name | Purpose |
+|------------|---------|
+| `nil_vs_empty_memo_string` | Verifies empty string memo serialization |
+| `nil_vs_empty_fee_amount` | Verifies empty array fee amount serialization |
+| `nil_vs_empty_combined` | Verifies both empty memo AND empty fee amounts |
+| `nil_vs_empty_message_data_object` | Verifies `{}` message data |
+| `nil_vs_empty_message_data_null` | Verifies `null` message data |
+
+### Language-Specific Guidance
+
+**Go**:
+```go
+// Both nil and empty slice serialize to []
+var coins []SignDocCoin = nil  // OK: serializes to "amount":[]
+coins = []SignDocCoin{}        // OK: serializes to "amount":[]
+```
+
+**JavaScript/TypeScript**:
+```javascript
+// Normalize before serialization
+const memo = input.memo ?? "";          // null/undefined → ""
+const amount = input.fee?.amount ?? []; // null/undefined → []
+```
+
+**Rust**:
+```rust
+// Use Option<T> with default serialization
+let memo: String = input.memo.unwrap_or_default();
+let amount: Vec<Coin> = input.amount.unwrap_or_default();
+```
+
+**Python**:
+```python
+# Normalize None values
+memo = input.memo if input.memo is not None else ""
+amount = input.fee.amount if input.fee.amount is not None else []
+```
 
 ## Well-Known Test Keys
 

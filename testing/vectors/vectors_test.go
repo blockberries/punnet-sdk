@@ -33,7 +33,13 @@ func verifyVector(t *testing.T, vector TestVector) {
 	t.Helper()
 
 	// 1. Build SignDoc from input
-	signDoc := buildSignDocFromInput(vector.Input)
+	// Use the null-data-aware builder for vectors that test null message data
+	var signDoc *types.SignDoc
+	if hasNullMessageData(vector.Input) {
+		signDoc = buildSignDocFromInputWithNullData(vector.Input)
+	} else {
+		signDoc = buildSignDocFromInput(vector.Input)
+	}
 
 	// 2. Verify JSON serialization matches expected
 	signDocJSON, err := signDoc.ToJSON()
@@ -177,8 +183,13 @@ func TestSignDocRoundtrip(t *testing.T) {
 
 	for _, vector := range vectors.Vectors {
 		t.Run(vector.Name, func(t *testing.T) {
-			// Build SignDoc from input
-			original := buildSignDocFromInput(vector.Input)
+			// Build SignDoc from input - use null-aware builder for null data tests
+			var original *types.SignDoc
+			if hasNullMessageData(vector.Input) {
+				original = buildSignDocFromInputWithNullData(vector.Input)
+			} else {
+				original = buildSignDocFromInput(vector.Input)
+			}
 
 			// Serialize to JSON
 			jsonBytes, err := original.ToJSON()
@@ -320,8 +331,13 @@ func TestSignatureVerificationWithCryptoPackage(t *testing.T) {
 
 	for _, vector := range vectors.Vectors {
 		t.Run(vector.Name, func(t *testing.T) {
-			// Build SignDoc
-			signDoc := buildSignDocFromInput(vector.Input)
+			// Build SignDoc - use null-aware builder for null data tests
+			var signDoc *types.SignDoc
+			if hasNullMessageData(vector.Input) {
+				signDoc = buildSignDocFromInputWithNullData(vector.Input)
+			} else {
+				signDoc = buildSignDocFromInput(vector.Input)
+			}
 			signBytes, err := signDoc.GetSignBytes()
 			require.NoError(t, err)
 
@@ -344,4 +360,14 @@ func TestSignatureVerificationWithCryptoPackage(t *testing.T) {
 			assert.True(t, valid, "signature should verify")
 		})
 	}
+}
+
+// hasNullMessageData checks if any message in the input has nil/null data.
+func hasNullMessageData(input TestVectorInput) bool {
+	for _, msg := range input.Messages {
+		if msg.Data == nil {
+			return true
+		}
+	}
+	return false
 }
