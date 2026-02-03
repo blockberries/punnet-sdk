@@ -4,6 +4,7 @@ package testing
 import (
 	"bytes"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/blockberries/punnet-sdk/types"
@@ -93,4 +94,104 @@ func AssertSignDocDataValid(t *testing.T, msg types.SignDocSerializable) {
 	// Verify determinism with thorough iteration count
 	// Using 100 iterations as recommended for catching Go map iteration randomization
 	AssertSignDocDataDeterminism(t, msg, 100)
+}
+
+// AssertSignDocDataDeterminismConcurrent validates that a SignDocSerializable
+// implementation produces deterministic output even when called concurrently
+// from multiple goroutines.
+//
+// SECURITY: This test catches race conditions in SignDocData() implementations
+// that may use shared mutable state (e.g., cached serialization buffers,
+// lazy-initialized fields, or incorrectly shared temporaries). Such bugs can
+// cause signature verification failures under load, which is especially dangerous
+// in validator nodes processing multiple transactions simultaneously.
+//
+// WARNING: This test does NOT prove thread-safety. A passing test only means
+// we didn't observe a race in this run. Use with -race flag for complete
+// coverage:
+//
+//	go test -race ./...
+//
+// Usage:
+//
+//	func TestMyMessage_SignDocDataConcurrent(t *testing.T) {
+//	    msg := &MyMessage{From: "alice", To: "bob", Amount: 100}
+//	    punnettesting.AssertSignDocDataDeterminismConcurrent(t, msg, 10, 100)
+//	}
+//
+// Parameters:
+//   - t: The testing.T instance
+//   - msg: A message implementing SignDocSerializable
+//   - goroutines: Number of concurrent goroutines (recommend 4-16)
+//   - iterationsPerGoroutine: Calls per goroutine (recommend 50-100)
+//
+// IMPLEMENTATION NOTE: The function collects all results and checks them
+// after all goroutines complete. This avoids synchronization overhead
+// during the hot path while still detecting non-determinism.
+func AssertSignDocDataDeterminismConcurrent(t *testing.T, msg types.SignDocSerializable, goroutines, iterationsPerGoroutine int) {
+	t.Helper()
+
+	if goroutines < 1 {
+		t.Fatal("AssertSignDocDataDeterminismConcurrent requires at least 1 goroutine")
+	}
+	if iterationsPerGoroutine < 1 {
+		t.Fatal("AssertSignDocDataDeterminismConcurrent requires at least 1 iteration per goroutine")
+	}
+
+	// Get the reference value first (single-threaded, before concurrent access)
+	reference, err := msg.SignDocData()
+	require.NoError(t, err, "SignDocData() failed on initial reference call")
+	require.NotNil(t, reference, "SignDocData() returned nil on initial reference call")
+
+	// Channel to collect all results
+	totalResults := goroutines * iterationsPerGoroutine
+	results := make(chan concurrentResult, totalResults)
+
+	var wg sync.WaitGroup
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for i := 0; i < iterationsPerGoroutine; i++ {
+				data, err := msg.SignDocData()
+				results <- concurrentResult{
+					data:        data,
+					err:         err,
+					goroutineID: goroutineID,
+					iteration:   i,
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	close(results)
+
+	// Check all results against reference
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("SignDocData() failed in goroutine %d, iteration %d: %v",
+				r.goroutineID, r.iteration, r.err)
+		}
+		if r.data == nil {
+			t.Fatalf("SignDocData() returned nil in goroutine %d, iteration %d",
+				r.goroutineID, r.iteration)
+		}
+		if !bytes.Equal(reference, r.data) {
+			t.Fatalf("SignDocData() returned different bytes in goroutine %d, iteration %d.\n"+
+				"Reference: %s\n"+
+				"Got:       %s\n"+
+				"This indicates a race condition or non-thread-safe implementation.\n"+
+				"Check for shared mutable state, unsynchronized caches, or lazy initialization.\n"+
+				"Run with -race flag for more details: go test -race ./...",
+				r.goroutineID, r.iteration, string(reference), string(r.data))
+		}
+	}
+}
+
+// concurrentResult holds the result of a single SignDocData() call during concurrent testing.
+type concurrentResult struct {
+	data        json.RawMessage
+	err         error
+	goroutineID int
+	iteration   int
 }
