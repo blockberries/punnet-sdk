@@ -93,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `CurveOrder()`/`HalfCurveOrder()` returning mutable `*big.Int` pointers (#185)
+  - Functions now return defensive copies instead of pointers to package-level variables
+  - Prevents potential global state corruption if callers accidentally mutate the returned value
+  - Small allocation cost (~32 bytes per call) justified by safety benefit
 - Fix data race in `MemoryStore.Get()` during concurrent delete (#127)
   - Hold read lock during entire `Clone()` operation
   - Prevents `Zeroize()` from racing with copy
