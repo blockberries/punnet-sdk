@@ -361,57 +361,113 @@ func TestHalfCurveOrder(t *testing.T) {
 	}
 }
 
-func TestCurveOrder_DefensiveCopy(t *testing.T) {
-	// Verify that CurveOrder returns a defensive copy that can be safely mutated
-	// without affecting subsequent calls (issue #185)
+func TestCurveOrderReturnsDefensiveCopy(t *testing.T) {
+	// Issue #185: CurveOrder() must return a defensive copy to prevent
+	// accidental corruption of package-level constants.
+	//
+	// If a caller mutates the returned value, it should NOT affect subsequent
+	// calls or the internal constant.
+
 	for _, algo := range []Algorithm{AlgorithmSecp256k1, AlgorithmSecp256r1} {
 		t.Run(algo.String(), func(t *testing.T) {
-			// Get original value
+			// Get the original value
 			original := CurveOrder(algo)
 			if original == nil {
-				t.Fatal("CurveOrder returned nil")
+				t.Fatalf("CurveOrder(%s) returned nil", algo)
 			}
-			originalBytes := original.Bytes()
+			originalCopy := new(big.Int).Set(original)
 
-			// Mutate the returned value
+			// Mutate the returned value (simulating accidental caller mutation)
 			original.Add(original, big.NewInt(1))
 
-			// Get a fresh copy - should be unaffected by our mutation
+			// Get another value - it should be unaffected
 			fresh := CurveOrder(algo)
 			if fresh == nil {
-				t.Fatal("CurveOrder returned nil after mutation")
+				t.Fatalf("CurveOrder(%s) returned nil after mutation", algo)
 			}
 
-			if !bytes.Equal(fresh.Bytes(), originalBytes) {
-				t.Error("CurveOrder() was corrupted by caller mutation - defensive copy not working")
+			// The fresh value should match the original (pre-mutation) value
+			if fresh.Cmp(originalCopy) != 0 {
+				t.Errorf("CurveOrder(%s) was corrupted by caller mutation", algo)
+			}
+
+			// Verify the two returned values are different pointers (independent copies)
+			original2 := CurveOrder(algo)
+			original3 := CurveOrder(algo)
+			if original2 == original3 {
+				t.Errorf("CurveOrder(%s) returned same pointer twice - not a defensive copy", algo)
 			}
 		})
 	}
 }
 
-func TestHalfCurveOrder_DefensiveCopy(t *testing.T) {
-	// Verify that HalfCurveOrder returns a defensive copy that can be safely mutated
-	// without affecting subsequent calls (issue #185)
+func TestHalfCurveOrderReturnsDefensiveCopy(t *testing.T) {
+	// Issue #185: HalfCurveOrder() must return a defensive copy to prevent
+	// accidental corruption of package-level constants.
+
 	for _, algo := range []Algorithm{AlgorithmSecp256k1, AlgorithmSecp256r1} {
 		t.Run(algo.String(), func(t *testing.T) {
-			// Get original value
+			// Get the original value
 			original := HalfCurveOrder(algo)
 			if original == nil {
-				t.Fatal("HalfCurveOrder returned nil")
+				t.Fatalf("HalfCurveOrder(%s) returned nil", algo)
 			}
-			originalBytes := original.Bytes()
+			originalCopy := new(big.Int).Set(original)
 
-			// Mutate the returned value
-			original.Add(original, big.NewInt(1))
+			// Mutate the returned value (simulating accidental caller mutation)
+			original.Sub(original, big.NewInt(1))
 
-			// Get a fresh copy - should be unaffected by our mutation
+			// Get another value - it should be unaffected
 			fresh := HalfCurveOrder(algo)
 			if fresh == nil {
-				t.Fatal("HalfCurveOrder returned nil after mutation")
+				t.Fatalf("HalfCurveOrder(%s) returned nil after mutation", algo)
 			}
 
-			if !bytes.Equal(fresh.Bytes(), originalBytes) {
-				t.Error("HalfCurveOrder() was corrupted by caller mutation - defensive copy not working")
+			// The fresh value should match the original (pre-mutation) value
+			if fresh.Cmp(originalCopy) != 0 {
+				t.Errorf("HalfCurveOrder(%s) was corrupted by caller mutation", algo)
+			}
+
+			// Verify the two returned values are different pointers (independent copies)
+			original2 := HalfCurveOrder(algo)
+			original3 := HalfCurveOrder(algo)
+			if original2 == original3 {
+				t.Errorf("HalfCurveOrder(%s) returned same pointer twice - not a defensive copy", algo)
+			}
+		})
+	}
+}
+
+func TestCurveOrderDefensiveCopyDoesNotBreakSignatureValidation(t *testing.T) {
+	// Verify that signature operations still work correctly after the defensive
+	// copy change (sanity check that we didn't break anything)
+	for _, algo := range []Algorithm{AlgorithmSecp256k1, AlgorithmSecp256r1} {
+		t.Run(algo.String(), func(t *testing.T) {
+			key, err := GeneratePrivateKey(algo)
+			if err != nil {
+				t.Fatalf("GeneratePrivateKey failed: %v", err)
+			}
+
+			message := []byte("test message for defensive copy validation")
+			sig, err := key.Sign(message)
+			if err != nil {
+				t.Fatalf("Sign failed: %v", err)
+			}
+
+			// Signature should be low-S
+			if !IsLowSForAlgorithm(sig, algo) {
+				t.Error("signature should be low-S")
+			}
+
+			// Verify should work
+			if !key.PublicKey().Verify(message, sig) {
+				t.Error("signature verification failed")
+			}
+
+			// Normalize should work
+			normalized := NormalizeSignature(sig, algo)
+			if normalized == nil {
+				t.Error("NormalizeSignature returned nil")
 			}
 		})
 	}

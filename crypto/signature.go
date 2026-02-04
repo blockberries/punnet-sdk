@@ -156,7 +156,7 @@ func MakeHighS(sig []byte, algo Algorithm) []byte {
 // Returns nil for unsupported algorithms.
 //
 // The returned value is a defensive copy that callers may safely modify.
-// This prevents accidental corruption of the package-level constant.
+// This prevents accidental corruption of the package-level constants.
 //
 // Complexity: O(1)
 // Allocations: 1 big.Int (~40 bytes including header)
@@ -176,7 +176,7 @@ func CurveOrder(algo Algorithm) *big.Int {
 // Returns nil for unsupported algorithms.
 //
 // The returned value is a defensive copy that callers may safely modify.
-// This prevents accidental corruption of the package-level constant.
+// This prevents accidental corruption of the package-level constants.
 //
 // Complexity: O(1)
 // Allocations: 1 big.Int (~40 bytes including header)
