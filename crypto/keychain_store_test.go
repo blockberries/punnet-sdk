@@ -34,9 +34,13 @@ func testServiceName(t *testing.T) string {
 }
 
 // cleanupKeychain removes all test keys from the keychain.
+// It cleans BEFORE the test (to handle leftover keys from failed runs) and
+// registers cleanup AFTER the test via t.Cleanup.
 func cleanupKeychain(t *testing.T, serviceName string) {
 	t.Helper()
-	t.Cleanup(func() {
+
+	// Define the actual cleanup logic
+	doCleanup := func() {
 		// Get list and delete all keys
 		listStr, err := keyring.Get(serviceName, keychainListKey)
 		if err == nil && listStr != "" {
@@ -51,7 +55,47 @@ func cleanupKeychain(t *testing.T, serviceName string) {
 		}
 		// Delete the list key itself
 		_ = keyring.Delete(serviceName, keychainListKey)
-	})
+	}
+
+	// Clean BEFORE the test to handle leftover keys from previously failed runs
+	doCleanup()
+
+	// Also clean AFTER the test
+	t.Cleanup(doCleanup)
+}
+
+// cleanupKeychainWithKnownKeys performs thorough cleanup by deleting both
+// the indexed keys and specific known key patterns. This ensures cleanup
+// succeeds even if the key list index is corrupt or incomplete (orphaned keys).
+func cleanupKeychainWithKnownKeys(t *testing.T, serviceName string, knownKeyPatterns []string) {
+	t.Helper()
+
+	doCleanup := func() {
+		// First, try cleaning via the index (standard cleanup)
+		listStr, err := keyring.Get(serviceName, keychainListKey)
+		if err == nil && listStr != "" {
+			ks, _ := NewKeychainStore(serviceName)
+			if ks != nil {
+				names, _ := ks.List()
+				for _, name := range names {
+					_ = ks.Delete(name)
+				}
+			}
+		}
+
+		// Then, directly delete known key patterns that may be orphaned
+		// (in keychain but not in the index)
+		for _, keyName := range knownKeyPatterns {
+			_ = keyring.Delete(serviceName, keychainKeyPrefix+keyName)
+		}
+
+		// Delete the list key itself
+		_ = keyring.Delete(serviceName, keychainListKey)
+	}
+
+	// Clean BEFORE and AFTER
+	doCleanup()
+	t.Cleanup(doCleanup)
 }
 
 func TestNewKeychainStore(t *testing.T) {
@@ -374,7 +418,7 @@ func TestKeychainStore_CloseIdempotent(t *testing.T) {
 func TestKeychainStore_ConcurrentAccess(t *testing.T) {
 	skipIfNoKeychain(t)
 	serviceName := testServiceName(t)
-	cleanupKeychain(t, serviceName)
+	cleanupKeychainWithKnownKeys(t, serviceName, []string{"concurrent"})
 
 	ks, err := NewKeychainStore(serviceName)
 	require.NoError(t, err)
@@ -410,14 +454,23 @@ func TestKeychainStore_ConcurrentAccess(t *testing.T) {
 func TestKeychainStore_ConcurrentStoreLoad(t *testing.T) {
 	skipIfNoKeychain(t)
 	serviceName := testServiceName(t)
-	cleanupKeychain(t, serviceName)
-
-	ks, err := NewKeychainStore(serviceName)
-	require.NoError(t, err)
 
 	const numKeys = 10
 	const numReaders = 3
 	const readsPerReader = 10
+
+	// Build list of all key names this test uses
+	knownKeys := make([]string, 0, numKeys)
+	for i := 0; i < numKeys/2; i++ {
+		knownKeys = append(knownKeys, fmt.Sprintf("preload-%d", i))
+	}
+	for i := numKeys / 2; i < numKeys; i++ {
+		knownKeys = append(knownKeys, fmt.Sprintf("concurrent-%d", i))
+	}
+	cleanupKeychainWithKnownKeys(t, serviceName, knownKeys)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
 
 	// Pre-store some keys that readers will access
 	for i := 0; i < numKeys/2; i++ {
@@ -493,13 +546,20 @@ func TestKeychainStore_ConcurrentStoreLoad(t *testing.T) {
 func TestKeychainStore_ConcurrentStoreDelete(t *testing.T) {
 	skipIfNoKeychain(t)
 	serviceName := testServiceName(t)
-	cleanupKeychain(t, serviceName)
-
-	ks, err := NewKeychainStore(serviceName)
-	require.NoError(t, err)
 
 	const numIterations = 10
 	const numDeleters = 2
+
+	// Build list of all key names this test uses
+	knownKeys := make([]string, 0, numIterations*2)
+	for i := 0; i < numIterations; i++ {
+		knownKeys = append(knownKeys, fmt.Sprintf("delete-me-%d", i))
+		knownKeys = append(knownKeys, fmt.Sprintf("new-key-%d", i))
+	}
+	cleanupKeychainWithKnownKeys(t, serviceName, knownKeys)
+
+	ks, err := NewKeychainStore(serviceName)
+	require.NoError(t, err)
 
 	// Pre-store keys that will be deleted
 	keysToDelete := make([]string, numIterations)
@@ -576,7 +636,15 @@ func TestKeychainStore_ConcurrentStoreDelete(t *testing.T) {
 func TestKeychainStore_ConcurrentClose(t *testing.T) {
 	skipIfNoKeychain(t)
 	serviceName := testServiceName(t)
-	cleanupKeychain(t, serviceName)
+
+	const numKeys = 5
+
+	// Build list of all key names this test uses
+	knownKeys := make([]string, numKeys)
+	for i := 0; i < numKeys; i++ {
+		knownKeys[i] = fmt.Sprintf("key-%d", i)
+	}
+	cleanupKeychainWithKnownKeys(t, serviceName, knownKeys)
 
 	ks, err := NewKeychainStore(serviceName)
 	require.NoError(t, err)
@@ -584,7 +652,7 @@ func TestKeychainStore_ConcurrentClose(t *testing.T) {
 	kcs := ks.(*KeychainStore)
 
 	// Pre-store some keys
-	for i := 0; i < 5; i++ {
+	for i := 0; i < numKeys; i++ {
 		key := EncryptedKey{
 			Name:        fmt.Sprintf("key-%d", i),
 			Algorithm:   AlgorithmEd25519,
