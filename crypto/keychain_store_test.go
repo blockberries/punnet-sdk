@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,17 +30,19 @@ func skipIfNoKeychain(t *testing.T) {
 }
 
 // testServiceName generates a unique service name for test isolation.
+// Uses nanosecond timestamp to ensure uniqueness across parallel runs
+// and -count=N iterations.
 func testServiceName(t *testing.T) string {
-	return fmt.Sprintf("punnet-sdk-test-%s", t.Name())
+	return fmt.Sprintf("punnet-sdk-test-%s-%d", t.Name(), time.Now().UnixNano())
 }
 
 // cleanupKeychain removes all test keys from the keychain.
-// It cleans BEFORE the test (to handle leftover keys from failed runs) and
-// registers cleanup AFTER the test via t.Cleanup.
+// It cleans up both BEFORE and AFTER the test to handle stale data
+// from previous runs (especially when using -count=N).
 func cleanupKeychain(t *testing.T, serviceName string) {
 	t.Helper()
 
-	// Define the actual cleanup logic
+	// Helper to perform the actual cleanup
 	doCleanup := func() {
 		// Get list and delete all keys
 		listStr, err := keyring.Get(serviceName, keychainListKey)
