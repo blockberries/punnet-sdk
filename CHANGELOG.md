@@ -119,6 +119,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Return defensive copies from `CurveOrder()` and `HalfCurveOrder()` (#185)
+  - Prevents corruption of package-level curve constants from caller mutation
+  - Protects against unpredictable failures in concurrent network handlers
+  - Cost: 1 allocation per call (~40 bytes), acceptable for protocol setup paths
 - Document empty `chain_id` rejection for replay protection (#124)
   - Empty chain IDs must be rejected to prevent cross-chain replay attacks
   - Added comprehensive test coverage

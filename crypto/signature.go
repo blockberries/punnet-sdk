@@ -155,8 +155,11 @@ func MakeHighS(sig []byte, algo Algorithm) []byte {
 // CurveOrder returns a copy of the curve order (n) for the specified algorithm.
 // Returns nil for unsupported algorithms.
 //
-// The returned value is a defensive copy that is safe to modify.
+// The returned value is a defensive copy that callers may safely modify.
 // This prevents accidental corruption of the package-level constants.
+//
+// Complexity: O(1)
+// Allocations: 1 big.Int (~40 bytes including header)
 func CurveOrder(algo Algorithm) *big.Int {
 	switch algo {
 	case AlgorithmSecp256k1:
@@ -172,8 +175,11 @@ func CurveOrder(algo Algorithm) *big.Int {
 // This is the threshold for low-S signatures (s <= n/2).
 // Returns nil for unsupported algorithms.
 //
-// The returned value is a defensive copy that is safe to modify.
+// The returned value is a defensive copy that callers may safely modify.
 // This prevents accidental corruption of the package-level constants.
+//
+// Complexity: O(1)
+// Allocations: 1 big.Int (~40 bytes including header)
 func HalfCurveOrder(algo Algorithm) *big.Int {
 	switch algo {
 	case AlgorithmSecp256k1:
