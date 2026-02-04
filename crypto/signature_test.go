@@ -360,3 +360,59 @@ func TestHalfCurveOrder(t *testing.T) {
 		t.Error("halfN should equal N >> 1")
 	}
 }
+
+func TestCurveOrder_DefensiveCopy(t *testing.T) {
+	// Verify that CurveOrder returns a defensive copy that can be safely mutated
+	// without affecting subsequent calls (issue #185)
+	for _, algo := range []Algorithm{AlgorithmSecp256k1, AlgorithmSecp256r1} {
+		t.Run(algo.String(), func(t *testing.T) {
+			// Get original value
+			original := CurveOrder(algo)
+			if original == nil {
+				t.Fatal("CurveOrder returned nil")
+			}
+			originalBytes := original.Bytes()
+
+			// Mutate the returned value
+			original.Add(original, big.NewInt(1))
+
+			// Get a fresh copy - should be unaffected by our mutation
+			fresh := CurveOrder(algo)
+			if fresh == nil {
+				t.Fatal("CurveOrder returned nil after mutation")
+			}
+
+			if !bytes.Equal(fresh.Bytes(), originalBytes) {
+				t.Error("CurveOrder() was corrupted by caller mutation - defensive copy not working")
+			}
+		})
+	}
+}
+
+func TestHalfCurveOrder_DefensiveCopy(t *testing.T) {
+	// Verify that HalfCurveOrder returns a defensive copy that can be safely mutated
+	// without affecting subsequent calls (issue #185)
+	for _, algo := range []Algorithm{AlgorithmSecp256k1, AlgorithmSecp256r1} {
+		t.Run(algo.String(), func(t *testing.T) {
+			// Get original value
+			original := HalfCurveOrder(algo)
+			if original == nil {
+				t.Fatal("HalfCurveOrder returned nil")
+			}
+			originalBytes := original.Bytes()
+
+			// Mutate the returned value
+			original.Add(original, big.NewInt(1))
+
+			// Get a fresh copy - should be unaffected by our mutation
+			fresh := HalfCurveOrder(algo)
+			if fresh == nil {
+				t.Fatal("HalfCurveOrder returned nil after mutation")
+			}
+
+			if !bytes.Equal(fresh.Bytes(), originalBytes) {
+				t.Error("HalfCurveOrder() was corrupted by caller mutation - defensive copy not working")
+			}
+		})
+	}
+}
