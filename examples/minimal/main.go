@@ -1,178 +1,243 @@
+// Package main demonstrates a minimal Punnet SDK application using BAPI modules.
+// This example shows how to create and configure an application with auth, bank,
+// staking, and governance modules using the new BAPI-based architecture.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
-	"github.com/blockberries/punnet-sdk/capability"
+	"github.com/blockberries/blockberry/pkg/statestore"
 	"github.com/blockberries/punnet-sdk/modules/auth"
 	"github.com/blockberries/punnet-sdk/modules/bank"
+	"github.com/blockberries/punnet-sdk/modules/governance"
+	"github.com/blockberries/punnet-sdk/modules/staking"
+	"github.com/blockberries/punnet-sdk/runtime"
 	"github.com/blockberries/punnet-sdk/store"
 	"github.com/blockberries/punnet-sdk/types"
 )
 
-// MinimalApp demonstrates a minimal Punnet SDK application with auth and bank modules
 func main() {
-	fmt.Println("=== Punnet SDK Minimal Example ===")
+	fmt.Println("=== Punnet SDK BAPI Example ===")
 	fmt.Println()
 
-	// Step 1: Create backing store
-	fmt.Println("1. Creating memory backing store...")
-	backing := store.NewMemoryStore()
-
-	// Step 2: Create capability manager
-	fmt.Println("2. Creating capability manager...")
-	capManager := capability.NewCapabilityManager(backing)
-
-	// Step 3: Register modules
-	fmt.Println("3. Registering modules...")
-	if err := capManager.RegisterModule("auth"); err != nil {
-		log.Fatalf("Failed to register auth module: %v", err)
-	}
-	if err := capManager.RegisterModule("bank"); err != nil {
-		log.Fatalf("Failed to register bank module: %v", err)
-	}
-
-	// Step 4: Grant capabilities
-	fmt.Println("4. Granting capabilities...")
-	accountCap, err := capManager.GrantAccountCapability("auth")
+	// Step 1: Create backing StateStore (in-memory IAVL for example)
+	fmt.Println("1. Creating StateStore...")
+	ss, err := statestore.NewMemoryIAVLStore(1000)
 	if err != nil {
-		log.Fatalf("Failed to grant account capability: %v", err)
+		log.Fatalf("Failed to create state store: %v", err)
 	}
+	defer ss.Close()
+	fmt.Println("   - In-memory IAVL store created")
 
-	balanceCap, err := capManager.GrantBalanceCapability("bank")
-	if err != nil {
-		log.Fatalf("Failed to grant balance capability: %v", err)
-	}
+	// Step 2: Create typed stores for each domain
+	fmt.Println()
+	fmt.Println("2. Creating typed stores...")
+	accountStore := store.NewBAPIAccountStore(ss)
+	balanceStore := store.NewBAPIBalanceStore(ss)
+	validatorStore := store.NewBAPIValidatorStore(ss)
+	proposalStore := store.NewBAPIProposalStore(ss)
+	fmt.Println("   - AccountStore created")
+	fmt.Println("   - BalanceStore created")
+	fmt.Println("   - ValidatorStore created")
+	fmt.Println("   - ProposalStore created")
 
-	// Step 5: Create modules
-	fmt.Println("5. Creating modules...")
-	authMod, err := auth.CreateModule(accountCap)
+	// Step 3: Create BAPI modules
+	fmt.Println()
+	fmt.Println("3. Creating BAPI modules...")
+
+	authMod, err := auth.NewBAPIAuthModule(accountStore)
 	if err != nil {
 		log.Fatalf("Failed to create auth module: %v", err)
 	}
-	fmt.Printf("   - Auth module: %s\n", authMod.Name())
+	fmt.Printf("   - %s module created\n", authMod.Name())
 
-	bankMod, err := bank.CreateModule(balanceCap)
+	bankMod, err := bank.NewBAPIBankModule(balanceStore)
 	if err != nil {
 		log.Fatalf("Failed to create bank module: %v", err)
 	}
-	fmt.Printf("   - Bank module: %s\n", bankMod.Name())
+	fmt.Printf("   - %s module created\n", bankMod.Name())
 
-	// Step 6: Demonstrate account creation
+	stakingMod, err := staking.NewBAPIStakingModule(validatorStore, balanceStore)
+	if err != nil {
+		log.Fatalf("Failed to create staking module: %v", err)
+	}
+	fmt.Printf("   - %s module created\n", stakingMod.Name())
+
+	govMod, err := governance.NewBAPIGovernanceModule(proposalStore, balanceStore)
+	if err != nil {
+		log.Fatalf("Failed to create governance module: %v", err)
+	}
+	fmt.Printf("   - %s module created\n", govMod.Name())
+
+	// Step 4: Create BAPI Application
 	fmt.Println()
-	fmt.Println("6. Creating accounts...")
+	fmt.Println("4. Creating BAPI Application...")
+	app, err := runtime.NewBAPIApplication(runtime.BAPIApplicationConfig{
+		ChainID:    "example-chain-1",
+		StateStore: ss,
+		Modules: []runtime.BAPIModule{
+			authMod,
+			bankMod,
+			stakingMod,
+			govMod,
+		},
+	})
+	if err != nil {
+		log.Fatalf("Failed to create application: %v", err)
+	}
+	fmt.Printf("   - Application created for chain: %s\n", app.ChainID())
+
+	// Step 5: Show registered handlers
+	fmt.Println()
+	fmt.Println("5. Registered message handlers:")
+	router := app.Router()
+	for _, mod := range router.Modules() {
+		handlers := mod.RegisterMsgHandlers()
+		fmt.Printf("   - %s: %d handlers\n", mod.Name(), len(handlers))
+		for msgType := range handlers {
+			fmt.Printf("     * %s\n", msgType)
+		}
+	}
+
+	// Step 6: Show query handlers
+	fmt.Println()
+	fmt.Println("6. Registered query handlers:")
+	for _, mod := range router.Modules() {
+		queries := mod.RegisterQueryHandlers()
+		fmt.Printf("   - %s: %d queries\n", mod.Name(), len(queries))
+		for path := range queries {
+			fmt.Printf("     * %s\n", path)
+		}
+	}
+
+	// Step 7: Direct store operations (for setup, bypassing transaction flow)
+	fmt.Println()
+	fmt.Println("7. Setting up genesis state...")
 	ctx := context.Background()
 
-	alice, err := accountCap.CreateAccount(ctx, "alice", []byte("alice-pubkey-12345"))
-	if err != nil {
+	// Create accounts using helper function
+	aliceAccount := types.NewAccount(types.AccountName("alice"), []byte("alice-pubkey-12345678901234567890"))
+	if err := accountStore.Set(ctx, aliceAccount); err != nil {
 		log.Fatalf("Failed to create alice account: %v", err)
 	}
-	fmt.Printf("   - Created account: %s (nonce: %d)\n", alice.Name, alice.Nonce)
+	fmt.Println("   - Created account: alice")
 
-	bob, err := accountCap.CreateAccount(ctx, "bob", []byte("bob-pubkey-67890"))
-	if err != nil {
+	bobAccount := types.NewAccount(types.AccountName("bob"), []byte("bob-pubkey-12345678901234567890ab"))
+	if err := accountStore.Set(ctx, bobAccount); err != nil {
 		log.Fatalf("Failed to create bob account: %v", err)
 	}
-	fmt.Printf("   - Created account: %s (nonce: %d)\n", bob.Name, bob.Nonce)
+	fmt.Println("   - Created account: bob")
 
-	// Step 7: Set initial balances
-	fmt.Println()
-	fmt.Println("7. Setting initial balances...")
-	if err := balanceCap.SetBalance(ctx, "alice", "token", 1000); err != nil {
+	// Set initial balances
+	if err := balanceStore.Set(ctx, "alice", "stake", 1000000); err != nil {
 		log.Fatalf("Failed to set alice balance: %v", err)
 	}
-	fmt.Println("   - Alice: 1000 token")
+	fmt.Println("   - Set alice balance: 1,000,000 stake")
 
-	if err := balanceCap.SetBalance(ctx, "bob", "token", 500); err != nil {
+	if err := balanceStore.Set(ctx, "bob", "stake", 500000); err != nil {
 		log.Fatalf("Failed to set bob balance: %v", err)
 	}
-	fmt.Println("   - Bob: 500 token")
+	fmt.Println("   - Set bob balance: 500,000 stake")
 
 	// Step 8: Query balances
 	fmt.Println()
-	fmt.Println("8. Querying balances...")
-	aliceBalance, err := balanceCap.GetBalance(ctx, "alice", "token")
+	fmt.Println("8. Querying state...")
+
+	aliceBalance, err := balanceStore.GetAmount(ctx, "alice", "stake")
 	if err != nil {
 		log.Fatalf("Failed to get alice balance: %v", err)
 	}
-	fmt.Printf("   - Alice: %d token\n", aliceBalance)
+	fmt.Printf("   - Alice balance: %d stake\n", aliceBalance)
 
-	bobBalance, err := balanceCap.GetBalance(ctx, "bob", "token")
+	bobBalance, err := balanceStore.GetAmount(ctx, "bob", "stake")
 	if err != nil {
 		log.Fatalf("Failed to get bob balance: %v", err)
 	}
-	fmt.Printf("   - Bob: %d token\n", bobBalance)
+	fmt.Printf("   - Bob balance: %d stake\n", bobBalance)
 
-	// Step 9: Demonstrate transfer
+	// Step 9: Demonstrate direct query through application
 	fmt.Println()
-	fmt.Println("9. Transferring 200 token from Alice to Bob...")
-	if err := balanceCap.Transfer(ctx, "alice", "bob", "token", 200); err != nil {
-		log.Fatalf("Failed to transfer: %v", err)
+	fmt.Println("9. Querying through application...")
+
+	// Query governance params
+	govParamsHandler := govMod.RegisterQueryHandlers()["/gov/params"]
+	if govParamsHandler != nil {
+		result, err := govParamsHandler(ctx, nil, 0)
+		if err != nil {
+			log.Fatalf("Failed to query gov params: %v", err)
+		}
+		var params map[string]interface{}
+		if err := json.Unmarshal(result, &params); err != nil {
+			log.Fatalf("Failed to parse gov params: %v", err)
+		}
+		fmt.Printf("   - Governance min_deposit: %v\n", params["min_deposit"])
+		fmt.Printf("   - Governance deposit_denom: %v\n", params["deposit_denom"])
 	}
 
-	// Step 10: Query balances after transfer
+	// Step 10: Demonstrate message validation
 	fmt.Println()
-	fmt.Println("10. Querying balances after transfer...")
-	aliceBalance, err = balanceCap.GetBalance(ctx, "alice", "token")
-	if err != nil {
-		log.Fatalf("Failed to get alice balance: %v", err)
+	fmt.Println("10. Message validation examples...")
+
+	// Valid send message
+	sendMsg := &bank.MsgSend{
+		From:   types.AccountName("alice"),
+		To:     types.AccountName("bob"),
+		Amount: types.Coin{Denom: "stake", Amount: 100},
 	}
-	fmt.Printf("    - Alice: %d token (was 1000, sent 200)\n", aliceBalance)
-
-	bobBalance, err = balanceCap.GetBalance(ctx, "bob", "token")
-	if err != nil {
-		log.Fatalf("Failed to get bob balance: %v", err)
-	}
-	fmt.Printf("    - Bob: %d token (was 500, received 200)\n", bobBalance)
-
-	// Step 11: Demonstrate message handling
-	fmt.Println()
-	fmt.Println("11. Demonstrating message handling...")
-	charlie := types.AccountName("charlie")
-	charlieKey := []byte("charlie-pubkey-abcde")
-	charlieAuthority := types.NewAuthority(1, charlieKey, 1)
-
-	// Create a message (demonstrates message structure)
-	_ = &auth.MsgCreateAccount{
-		Name:      charlie,
-		PubKey:    charlieKey,
-		Authority: charlieAuthority,
+	if err := sendMsg.ValidateBasic(); err != nil {
+		fmt.Printf("    - MsgSend validation failed: %v\n", err)
+	} else {
+		fmt.Printf("    - MsgSend %s->%s %d%s: valid\n",
+			sendMsg.From, sendMsg.To, sendMsg.Amount.Amount, sendMsg.Amount.Denom)
 	}
 
-	// Get message handlers from module
-	authHandlers := authMod.RegisterMsgHandlers()
-	createHandler := authHandlers[auth.TypeMsgCreateAccount]
-
-	// Note: In a real application, you would create a proper runtime context
-	// For this example, we'll just show the module structure
-	fmt.Printf("    - Auth module has %d message handlers\n", len(authHandlers))
-	fmt.Printf("    - Bank module has %d message handlers\n", len(bankMod.RegisterMsgHandlers()))
-	fmt.Printf("    - Message type: %s\n", auth.TypeMsgCreateAccount)
-
-	if createHandler != nil {
-		fmt.Println("    - Handler registered successfully")
+	// Valid proposal submission
+	proposalMsg := &governance.MsgSubmitProposal{
+		Proposer:     types.AccountName("alice"),
+		Title:        "Test Proposal",
+		Description:  "This is a test proposal for demonstration",
+		ProposalType: governance.ProposalTypeText,
+		InitialDeposit: types.Coin{
+			Denom:  "stake",
+			Amount: 1000,
+		},
+	}
+	if err := proposalMsg.ValidateBasic(); err != nil {
+		fmt.Printf("    - MsgSubmitProposal validation failed: %v\n", err)
+	} else {
+		fmt.Printf("    - MsgSubmitProposal '%s': valid\n", proposalMsg.Title)
 	}
 
-	// Step 12: Summary
+	// Step 11: Summary
 	fmt.Println()
 	fmt.Println("=== Summary ===")
-	fmt.Println("This example demonstrated:")
-	fmt.Println("  1. Creating a backing store")
-	fmt.Println("  2. Setting up the capability manager")
-	fmt.Println("  3. Registering modules (auth, bank)")
-	fmt.Println("  4. Granting capabilities to modules")
-	fmt.Println("  5. Creating accounts")
-	fmt.Println("  6. Managing balances")
-	fmt.Println("  7. Transferring tokens")
-	fmt.Println("  8. Module message handlers")
 	fmt.Println()
-	fmt.Println("Key Punnet SDK concepts:")
-	fmt.Println("  - Capability-based security: Modules only access state through granted capabilities")
-	fmt.Println("  - Named accounts: Human-readable account names (e.g., 'alice', 'bob')")
-	fmt.Println("  - Effect-based execution: Handlers return effects, not direct mutations")
-	fmt.Println("  - Module composition: Independent modules work together via capabilities")
+	fmt.Println("This example demonstrated the BAPI-based Punnet SDK:")
+	fmt.Println()
+	fmt.Println("Architecture:")
+	fmt.Println("  - StateStore: blockberry IAVL-backed merkle tree")
+	fmt.Println("  - TypedStores: BAPIAccountStore, BAPIBalanceStore, etc.")
+	fmt.Println("  - BAPIModules: Handlers return Effects, not direct mutations")
+	fmt.Println("  - BAPIApplication: Implements BAPI Lifecycle interface")
+	fmt.Println()
+	fmt.Println("Registered Modules:")
+	fmt.Println("  - auth: Account creation, authority management, nonce tracking")
+	fmt.Println("  - bank: Token transfers, balance queries")
+	fmt.Println("  - staking: Validator registration, delegation")
+	fmt.Println("  - governance: Proposals, voting, deposits")
+	fmt.Println()
+	fmt.Println("Key Features:")
+	fmt.Println("  - Effect-based execution: Handlers return Effects")
+	fmt.Println("  - Dependency injection: Stores are injected into modules")
+	fmt.Println("  - Named accounts: Human-readable names (alice, bob)")
+	fmt.Println("  - BAPI Lifecycle: Handshake, CheckTx, ExecuteBlock, Commit, Query")
+	fmt.Println()
+	fmt.Println("Integration with Raspberry:")
+	fmt.Println("  - BAPIApplication implements raspberry's Application interface")
+	fmt.Println("  - Use node.WithApplication(app) when creating raspberry node")
 	fmt.Println()
 	fmt.Println("=== Example Complete ===")
 }

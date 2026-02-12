@@ -2,9 +2,14 @@ package effects
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/blockberries/punnet-sdk/types"
 )
+
+// MaxTransferAmount is the maximum amount that can be transferred in a single effect.
+// This prevents overflow during balance calculations.
+const MaxTransferAmount = math.MaxUint64 / 2
 
 // TransferEffect represents a token transfer effect
 type TransferEffect struct {
@@ -23,7 +28,7 @@ func (e TransferEffect) Type() EffectType {
 	return EffectTypeTransfer
 }
 
-// Validate performs validation
+// Validate performs validation including overflow checks
 func (e TransferEffect) Validate() error {
 	if !e.From.IsValid() {
 		return fmt.Errorf("invalid from account: %s", e.From)
@@ -31,13 +36,55 @@ func (e TransferEffect) Validate() error {
 	if !e.To.IsValid() {
 		return fmt.Errorf("invalid to account: %s", e.To)
 	}
+	if e.From == e.To {
+		return fmt.Errorf("cannot transfer to self")
+	}
+
+	// Check for duplicate denominations first (before IsValid which also checks this)
+	// to provide a more specific error message
+	seen := make(map[string]bool)
+	for _, coin := range e.Amount {
+		if seen[coin.Denom] {
+			return fmt.Errorf("duplicate denomination %s in transfer", coin.Denom)
+		}
+		seen[coin.Denom] = true
+	}
+
 	if !e.Amount.IsValid() {
 		return fmt.Errorf("invalid amount")
 	}
 	if !e.Amount.IsAllPositive() {
 		return fmt.Errorf("amount must be positive")
 	}
+
+	// Check for amounts that could cause overflow
+	for _, coin := range e.Amount {
+		if coin.Amount > MaxTransferAmount {
+			return fmt.Errorf("amount %d for %s exceeds maximum safe transfer amount %d",
+				coin.Amount, coin.Denom, MaxTransferAmount)
+		}
+	}
+
 	return nil
+}
+
+// SafeAdd adds two uint64 values with overflow checking.
+// Returns the result and true if successful, or 0 and false if overflow would occur.
+func SafeAdd(a, b uint64) (uint64, bool) {
+	result := a + b
+	if result < a {
+		return 0, false
+	}
+	return result, true
+}
+
+// SafeSub subtracts two uint64 values with underflow checking.
+// Returns the result and true if successful, or 0 and false if underflow would occur.
+func SafeSub(a, b uint64) (uint64, bool) {
+	if b > a {
+		return 0, false
+	}
+	return a - b, true
 }
 
 // Dependencies returns the dependencies
