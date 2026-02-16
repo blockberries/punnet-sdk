@@ -6,11 +6,17 @@ import (
 	"github.com/blockberries/punnet-sdk/types"
 )
 
+func init() {
+	types.RegisterMessage(TypeMsgCreateAccount, func() types.Message { return &MsgCreateAccount{} })
+	types.RegisterMessage(TypeMsgUpdateAuthority, func() types.Message { return &MsgUpdateAuthority{} })
+	types.RegisterMessage(TypeMsgDeleteAccount, func() types.Message { return &MsgDeleteAccount{} })
+}
+
 // Message type identifiers
 const (
-	TypeMsgCreateAccount    = "/punnet.auth.v1.MsgCreateAccount"
-	TypeMsgUpdateAuthority  = "/punnet.auth.v1.MsgUpdateAuthority"
-	TypeMsgDeleteAccount    = "/punnet.auth.v1.MsgDeleteAccount"
+	TypeMsgCreateAccount   = "/punnet.auth.v1.MsgCreateAccount"
+	TypeMsgUpdateAuthority = "/punnet.auth.v1.MsgUpdateAuthority"
+	TypeMsgDeleteAccount   = "/punnet.auth.v1.MsgDeleteAccount"
 )
 
 // MsgCreateAccount creates a new account

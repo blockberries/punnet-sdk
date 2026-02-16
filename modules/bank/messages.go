@@ -6,6 +6,11 @@ import (
 	"github.com/blockberries/punnet-sdk/types"
 )
 
+func init() {
+	types.RegisterMessage(TypeMsgSend, func() types.Message { return &MsgSend{} })
+	types.RegisterMessage(TypeMsgMultiSend, func() types.Message { return &MsgMultiSend{} })
+}
+
 // Message type identifiers
 const (
 	TypeMsgSend      = "/punnet.bank.v1.MsgSend"

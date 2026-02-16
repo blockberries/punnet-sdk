@@ -6,6 +6,12 @@ import (
 	"github.com/blockberries/punnet-sdk/types"
 )
 
+func init() {
+	types.RegisterMessage(TypeMsgSubmitProposal, func() types.Message { return &MsgSubmitProposal{} })
+	types.RegisterMessage(TypeMsgVote, func() types.Message { return &MsgVote{} })
+	types.RegisterMessage(TypeMsgDeposit, func() types.Message { return &MsgDeposit{} })
+}
+
 const (
 	// ModuleName is the governance module's name.
 	ModuleName = "governance"

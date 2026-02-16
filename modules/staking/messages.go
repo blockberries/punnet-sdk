@@ -6,6 +6,12 @@ import (
 	"github.com/blockberries/punnet-sdk/types"
 )
 
+func init() {
+	types.RegisterMessage(TypeMsgCreateValidator, func() types.Message { return &MsgCreateValidator{} })
+	types.RegisterMessage(TypeMsgDelegate, func() types.Message { return &MsgDelegate{} })
+	types.RegisterMessage(TypeMsgUndelegate, func() types.Message { return &MsgUndelegate{} })
+}
+
 // Message type identifiers
 const (
 	TypeMsgCreateValidator = "/punnet.staking.v1.MsgCreateValidator"

@@ -2,6 +2,7 @@ package types
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 )
 
@@ -101,11 +102,9 @@ func (tx *Transaction) Hash() []byte {
 	return h.Sum(nil)
 }
 
-// GetSignBytes returns the bytes to sign for this transaction
-// This is used for signature verification
+// GetSignBytes returns the bytes to sign for this transaction.
+// Includes full message content (not just type strings) for security.
 func (tx *Transaction) GetSignBytes() []byte {
-	// TODO: Use proper canonical serialization (Cramberry) for production
-	// For now, use a simple concatenation
 	h := sha256.New()
 	h.Write([]byte(tx.Account))
 
@@ -116,15 +115,85 @@ func (tx *Transaction) GetSignBytes() []byte {
 	}
 	h.Write(nonceBytes)
 
-	// Add messages
+	// Add full message content for each message
 	for _, msg := range tx.Messages {
 		h.Write([]byte(msg.Type()))
+		// Include JSON-serialized message content to prevent signature malleability
+		msgBytes, err := json.Marshal(msg)
+		if err == nil {
+			h.Write(msgBytes)
+		}
 	}
 
 	// Add memo
 	h.Write([]byte(tx.Memo))
 
 	return h.Sum(nil)
+}
+
+// transactionJSON is the private JSON wire format for Transaction.
+type transactionJSON struct {
+	Account       AccountName      `json:"account"`
+	Messages      []MessageEnvelope `json:"messages"`
+	Authorization *Authorization   `json:"authorization"`
+	Nonce         uint64           `json:"nonce"`
+	Memo          string           `json:"memo,omitempty"`
+}
+
+// MarshalJSON implements json.Marshaler with type-discriminated messages.
+func (tx Transaction) MarshalJSON() ([]byte, error) {
+	envelopes := make([]MessageEnvelope, len(tx.Messages))
+	for i, msg := range tx.Messages {
+		value, err := json.Marshal(msg)
+		if err != nil {
+			return nil, fmt.Errorf("marshal message %d: %w", i, err)
+		}
+		envelopes[i] = MessageEnvelope{
+			Type:  msg.Type(),
+			Value: value,
+		}
+	}
+
+	return json.Marshal(transactionJSON{
+		Account:       tx.Account,
+		Messages:      envelopes,
+		Authorization: tx.Authorization,
+		Nonce:         tx.Nonce,
+		Memo:          tx.Memo,
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler with type-discriminated messages.
+func (tx *Transaction) UnmarshalJSON(data []byte) error {
+	var raw transactionJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("unmarshal transaction: %w", err)
+	}
+
+	msgs := make([]Message, len(raw.Messages))
+	for i, env := range raw.Messages {
+		msg, err := UnmarshalMessageJSON(mustMarshalEnvelope(env))
+		if err != nil {
+			return fmt.Errorf("unmarshal message %d: %w", i, err)
+		}
+		msgs[i] = msg
+	}
+
+	tx.Account = raw.Account
+	tx.Messages = msgs
+	tx.Authorization = raw.Authorization
+	tx.Nonce = raw.Nonce
+	tx.Memo = raw.Memo
+	return nil
+}
+
+// mustMarshalEnvelope marshals a MessageEnvelope back to JSON bytes.
+func mustMarshalEnvelope(env MessageEnvelope) []byte {
+	data, err := json.Marshal(env)
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal message envelope: %v", err))
+	}
+	return data
 }
 
 // VerifyAuthorization verifies the transaction authorization
