@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+
+	"github.com/blockberries/cramberry/pkg/cramberry"
 )
 
 // Transaction represents a signed transaction
@@ -22,6 +24,18 @@ type Transaction struct {
 
 	// Memo is an optional memo
 	Memo string `json:"memo,omitempty"`
+
+	// Fee carries the three-component fee payload per the tokenomics
+	// spec §3 (OpFees, ByteFee, Priority, Payer). The Fee is part of
+	// the signed payload — submitters cannot mutate it after signing.
+	// AnteHandler (added in tokenomics Phase 1) validates components
+	// against the current FeeSchedule and routes per the spec.
+	//
+	// Today's omitempty behavior: a Transaction with a zero Fee
+	// (no OpFees, ByteFee=0, Priority=0) is accepted by the runtime
+	// pre-AnteHandler. Once Phase 1 lands the AnteHandler will reject
+	// any tx whose Fee doesn't match the schedule. PLAN §7 Phase 0.1.
+	Fee Fee `json:"fee,omitempty"`
 }
 
 // NewTransaction creates a new transaction
@@ -87,23 +101,90 @@ func (tx *Transaction) ValidateBasic() error {
 		return fmt.Errorf("%w: memo exceeds 512 bytes", ErrInvalidTransaction)
 	}
 
+	// Fee structural validation. Component overflow, payer validity,
+	// duplicate-message-type detection all happen in Fee.ValidateBasic.
+	if err := tx.Fee.ValidateBasic(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidTransaction, err)
+	}
+
+	// Cross-validate Fee.OpFees against tx.Messages: when OpFees is
+	// populated, it must carry exactly one entry per message (same
+	// order, same Type()). Empty OpFees is allowed here — that's the
+	// "fee-less submission" path used by pre-AnteHandler tests; once
+	// Phase 1 lands, the AnteHandler rejects fee-less txs at execution.
+	if len(tx.Fee.OpFees) > 0 {
+		if len(tx.Fee.OpFees) != len(tx.Messages) {
+			return fmt.Errorf("%w: fee op_fees count %d != messages count %d",
+				ErrInvalidTransaction, len(tx.Fee.OpFees), len(tx.Messages))
+		}
+		for i, op := range tx.Fee.OpFees {
+			if op.MessageType != tx.Messages[i].Type() {
+				return fmt.Errorf("%w: fee op_fees[%d].message_type %q != messages[%d].Type() %q",
+					ErrInvalidTransaction, i, op.MessageType, i, tx.Messages[i].Type())
+			}
+		}
+	}
+
+	// Payer authorization: when Fee.Payer is set and differs from
+	// tx.Account, it must appear among the signers of every message
+	// — otherwise the signature doesn't cover the fee charge.
+	payer := tx.Fee.PayerOrAccount(tx.Account)
+	if payer != tx.Account {
+		for i, msg := range tx.Messages {
+			covered := false
+			for _, signer := range msg.GetSigners() {
+				if signer == payer {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				return fmt.Errorf("%w: fee payer %s not in signers of message %d",
+					ErrInvalidTransaction, payer, i)
+			}
+		}
+	}
+
 	return nil
 }
 
-// Hash computes the transaction hash
+// Hash computes a deterministic identifier for this transaction.
+//
+// The hash inputs are the same fields covered by GetSignBytes (account,
+// nonce, per-message Type + cramberry-encoded body, memo), so two TXs
+// that share an account+nonce but differ in messages produce different
+// hashes. This is the same recipe we use for SignDoc bytes — signature
+// is excluded to keep the hash stable across signature recomputation
+// (e.g. multi-sig reconstruction).
+//
+// The previous implementation hashed only `account || msg.Type()`,
+// which collapsed any two TXs from the same account with the same
+// message-type sequence into the same hash — a real collision class
+// for mempool dedup. The fix is cramberry-encoded message bodies,
+// matching the determinism guarantees from PLAN T1-6.
 func (tx *Transaction) Hash() []byte {
-	// TODO: Use proper serialization (Cramberry) for production
-	// For now, use a simple hash of concatenated fields
-	h := sha256.New()
-	h.Write([]byte(tx.Account))
-	for _, msg := range tx.Messages {
-		h.Write([]byte(msg.Type()))
-	}
-	return h.Sum(nil)
+	// Reuse GetSignBytes — both produce a deterministic hash of the
+	// transaction's authorizing content. If we later need to include
+	// the signature (so the hash distinguishes resigned TXs), swap to
+	// `sha256(cramberry.Marshal(tx))`; today there's no consumer that
+	// needs that.
+	return tx.GetSignBytes()
 }
 
 // GetSignBytes returns the bytes to sign for this transaction.
-// Includes full message content (not just type strings) for security.
+//
+// Determinism is consensus-critical: every validator must compute byte-identical
+// SignDoc bytes for the same transaction. Previously this function used
+// json.Marshal(msg) for message bodies, which iterates Go maps in random order
+// and therefore produces different SignDocs on different validators for the same
+// logical transaction (PLAN T1-6). The implementation now uses
+// cramberry.Marshal, whose wire format is deterministic by spec: struct fields
+// are emitted in field-number order, map keys are sorted, floats are normalized.
+//
+// The hash inputs are deliberately the same as before (account, nonce,
+// msg.Type(), msg-bytes, memo) so that the only behaviour change is "stable
+// across Go map-iteration runs". This is a wire-format change: nodes running
+// the JSON variant cannot interoperate with nodes running this variant.
 func (tx *Transaction) GetSignBytes() []byte {
 	h := sha256.New()
 	h.Write([]byte(tx.Account))
@@ -115,11 +196,13 @@ func (tx *Transaction) GetSignBytes() []byte {
 	}
 	h.Write(nonceBytes)
 
-	// Add full message content for each message
+	// Add full message content for each message using cramberry's deterministic
+	// binary encoding. Errors are intentionally swallowed (as before): a
+	// non-serializable message contributes only its Type() string, which
+	// preserves the prior "best effort" semantics.
 	for _, msg := range tx.Messages {
 		h.Write([]byte(msg.Type()))
-		// Include JSON-serialized message content to prevent signature malleability
-		msgBytes, err := json.Marshal(msg)
+		msgBytes, err := cramberry.Marshal(msg)
 		if err == nil {
 			h.Write(msgBytes)
 		}
@@ -128,16 +211,25 @@ func (tx *Transaction) GetSignBytes() []byte {
 	// Add memo
 	h.Write([]byte(tx.Memo))
 
+	// Add Fee — the signed payload includes the fee so submitters
+	// can't undercut by mutating it after signing. cramberry's
+	// deterministic encoding is what makes this stable across Go's
+	// non-deterministic map iteration. PLAN §7 decision D8.
+	if feeBytes, err := cramberry.Marshal(&tx.Fee); err == nil {
+		h.Write(feeBytes)
+	}
+
 	return h.Sum(nil)
 }
 
 // transactionJSON is the private JSON wire format for Transaction.
 type transactionJSON struct {
-	Account       AccountName      `json:"account"`
+	Account       AccountName       `json:"account"`
 	Messages      []MessageEnvelope `json:"messages"`
-	Authorization *Authorization   `json:"authorization"`
-	Nonce         uint64           `json:"nonce"`
-	Memo          string           `json:"memo,omitempty"`
+	Authorization *Authorization    `json:"authorization"`
+	Nonce         uint64            `json:"nonce"`
+	Memo          string            `json:"memo,omitempty"`
+	Fee           Fee               `json:"fee,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler with type-discriminated messages.
@@ -160,6 +252,7 @@ func (tx Transaction) MarshalJSON() ([]byte, error) {
 		Authorization: tx.Authorization,
 		Nonce:         tx.Nonce,
 		Memo:          tx.Memo,
+		Fee:           tx.Fee,
 	})
 }
 
@@ -184,6 +277,7 @@ func (tx *Transaction) UnmarshalJSON(data []byte) error {
 	tx.Authorization = raw.Authorization
 	tx.Nonce = raw.Nonce
 	tx.Memo = raw.Memo
+	tx.Fee = raw.Fee
 	return nil
 }
 
