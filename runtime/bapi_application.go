@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/blockberries/bapi"
 	"github.com/blockberries/bapi/types"
@@ -33,6 +34,12 @@ type BAPIApplication struct {
 	router         *BAPIRouter
 	effectExecutor *effects.BAPIExecutor
 
+	// anteHandlers run in registration order after authorization
+	// validation and before message handlers in executeTx. Empty by
+	// default; populated by RegisterAnteHandler. PLAN §7 Phase 0.4
+	// adds the framework; Phase 1.4 wires the fee handler.
+	anteHandlers []AnteHandler
+
 	// Typed stores (created from StateStore)
 	accountStore   *store.BAPIAccountStore
 	balanceStore   *store.BAPIBalanceStore
@@ -43,6 +50,13 @@ type BAPIApplication struct {
 	currentBlock *types.FinalizedBlock
 	appHash      types.AppHash
 	chainID      string
+
+	// Pending nonce tracking for mempool.
+	// Allows multiple in-flight TXs from the same account by tracking
+	// the next expected nonce per account across CheckTx calls.
+	// Cleared on Commit when committed state catches up.
+	pendingNonceMu sync.Mutex
+	pendingNonces  map[ptypes.AccountName]uint64
 
 	// Metrics
 	lastCommitHeight uint64
@@ -150,28 +164,45 @@ func (a *BAPIApplication) Handshake(ctx context.Context, req types.HandshakeRequ
 		}, nil
 	}
 
-	// Restart with existing state
+	// Restart with existing state — use the app's current latest version.
+	// We intentionally do NOT call LoadVersion(requestedHeight) because the
+	// IAVL version may differ from the block height (e.g., if earlier bugs
+	// created extra versions). The app's latest version is the correct state.
 	appVersion := a.stateStore.Version()
-	requestedHeight := int64(req.LastCommitted.Height)
 
-	if appVersion != requestedHeight {
-		// Try to load the requested version
-		if err := a.stateStore.LoadVersion(requestedHeight); err != nil {
-			return types.HandshakeResponse{}, fmt.Errorf(
-				"cannot load version %d, have %d: %w", requestedHeight, appVersion, err)
+	if appVersion <= 0 {
+		// App has no state despite engine reporting existing blocks.
+		// Fall back to genesis initialization if provided.
+		if req.Genesis != nil {
+			if err := a.initGenesis(ctx, req.Genesis); err != nil {
+				return types.HandshakeResponse{}, fmt.Errorf("init genesis on restart: %w", err)
+			}
+			hash, version, err := a.stateStore.Commit()
+			if err != nil {
+				return types.HandshakeResponse{}, fmt.Errorf("commit genesis on restart: %w", err)
+			}
+			copy(a.appHash[:], hash)
+			a.lastCommitHeight = uint64(version)
+			return types.HandshakeResponse{
+				LastBlock:    nil,
+				AppHash:      &a.appHash,
+				Capabilities: 0,
+			}, nil
 		}
+		return types.HandshakeResponse{}, fmt.Errorf(
+			"restart requested but app has no state (version 0) and no genesis provided")
 	}
 
 	rootHash := a.stateStore.RootHash()
 	copy(a.appHash[:], rootHash)
-	a.lastCommitHeight = uint64(a.stateStore.Version())
+	a.lastCommitHeight = uint64(appVersion)
 
 	var blockHash types.Hash
 	copy(blockHash[:], rootHash)
 
 	return types.HandshakeResponse{
 		LastBlock: &types.BlockID{
-			Height: uint64(a.stateStore.Version()),
+			Height: uint64(appVersion),
 			Hash:   blockHash,
 		},
 		AppHash:      &a.appHash,
@@ -202,8 +233,10 @@ func (a *BAPIApplication) CheckTx(ctx context.Context, tx types.Tx, mctx types.M
 		}, nil
 	}
 
-	// Validate authorization (signatures, nonces)
-	if err := a.validateAuthorization(ctx, ptx); err != nil {
+	// Validate authorization with pending nonce support.
+	// This allows multiple in-flight TXs from the same account by tracking
+	// the next expected nonce across CheckTx calls.
+	if err := a.checkTxAuthorization(ctx, ptx, mctx); err != nil {
 		return types.GateVerdict{
 			Code: 3,
 			Info: fmt.Sprintf("authorization failed: %v", err),
@@ -238,12 +271,26 @@ func (a *BAPIApplication) ExecuteBlock(ctx context.Context, block types.Finalize
 	a.currentBlock = &block
 	a.mu.Unlock()
 
+	// Snapshot consensus params for this block so modules (e.g. the
+	// staking slasher) can read per-block-policy values like
+	// slash-fraction. A missed read is non-fatal — modules fall back to
+	// compiled-in defaults — but logging the failure surfaces a
+	// configuration regression.
+	var paramsSnapshot *types.ConsensusParams
+	if a.paramsStore != nil {
+		p, err := a.paramsStore.Get(ctx)
+		if err == nil {
+			paramsSnapshot = p
+		}
+	}
+
 	// Create block context
 	blockCtx := &BAPIBlockContext{
 		Height:   block.Height,
 		Time:     block.Time,
 		Proposer: block.Proposer,
 		ChainID:  a.chainID,
+		Params:   paramsSnapshot,
 	}
 
 	// Run module begin-block hooks
@@ -259,12 +306,17 @@ func (a *BAPIApplication) ExecuteBlock(ctx context.Context, block types.Finalize
 		}
 	}
 
+	// Sort transactions by (account, nonce) to ensure correct execution order.
+	// TXs from DAG mempool batches may arrive out of nonce order when
+	// different workers batch TXs from the same account separately.
+	orderedTxs := a.orderTxsByNonce(block.Txs)
+
 	// Execute all transactions
-	txOutcomes := make([]types.TxOutcome, len(block.Txs))
+	txOutcomes := make([]types.TxOutcome, len(orderedTxs))
 	var blockEvents []types.Event
 	blockEvents = append(blockEvents, beginBlockEvents...)
 
-	for i, tx := range block.Txs {
+	for i, tx := range orderedTxs {
 		outcome, events := a.executeTx(ctx, blockCtx, tx, uint32(i))
 		txOutcomes[i] = outcome
 		blockEvents = append(blockEvents, events...)
@@ -312,6 +364,12 @@ func (a *BAPIApplication) Commit(ctx context.Context) (types.CommitResult, error
 	// Clear current block
 	a.currentBlock = nil
 
+	// Reset pending nonces. After commit, the committed state has the
+	// authoritative nonces. New CheckTx calls will read from committed state.
+	a.pendingNonceMu.Lock()
+	a.pendingNonces = nil
+	a.pendingNonceMu.Unlock()
+
 	// Return retain height (keep last 100 blocks for queries)
 	retainHeight := uint64(0)
 	if version > 100 {
@@ -335,13 +393,26 @@ func (a *BAPIApplication) Query(ctx context.Context, req types.StateQuery) (type
 		return types.StateQueryResult{Code: 1, Info: "empty query path"}, nil
 	}
 
-	// Determine height for query
+	// Determine height for query. Historical queries (req.Height set to
+	// a past version) aren't yet supported at the handler level —
+	// handlers read from a.stateStore which is always at the latest
+	// committed version. Surfacing a height parameter that handlers
+	// silently ignore would mislead clients into thinking they got
+	// historical state; reject such requests up front. Per-key
+	// historical reads ARE available via TypedStore.GetAtHeight; a
+	// future query handler can opt in to that.
+	currentVersion := a.stateStore.Version()
 	var queryHeight int64
 	if req.Height != nil {
 		queryHeight = int64(*req.Height)
-	} else {
-		queryHeight = a.stateStore.Version()
+		if queryHeight != 0 && queryHeight != currentVersion {
+			return types.StateQueryResult{
+				Code: 5,
+				Info: fmt.Sprintf("historical queries not supported: requested height %d, current %d", queryHeight, currentVersion),
+			}, nil
+		}
 	}
+	queryHeight = currentVersion
 
 	// Route query to handler
 	handler := a.router.GetQueryHandler(path)
@@ -384,6 +455,50 @@ func (a *BAPIApplication) Query(ctx context.Context, req types.StateQuery) (type
 	return response, nil
 }
 
+// orderTxsByNonce sorts transactions so that TXs from the same account are
+// executed in nonce order. TXs from different accounts retain their relative
+// order (stable sort). This is necessary because the DAG mempool may place
+// TXs from one account into different batches, and batch ordering doesn't
+// guarantee nonce ordering.
+func (a *BAPIApplication) orderTxsByNonce(txs []types.Tx) []types.Tx {
+	if len(txs) <= 1 {
+		return txs
+	}
+
+	type decoded struct {
+		raw     types.Tx
+		account ptypes.AccountName
+		nonce   uint64
+		ok      bool
+	}
+
+	items := make([]decoded, len(txs))
+	for i, tx := range txs {
+		ptx, err := a.decodeTx(tx)
+		if err != nil {
+			items[i] = decoded{raw: tx}
+			continue
+		}
+		items[i] = decoded{raw: tx, account: ptx.Account, nonce: ptx.Nonce, ok: true}
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		if !items[i].ok || !items[j].ok {
+			return false
+		}
+		if items[i].account != items[j].account {
+			return false // preserve original order across accounts
+		}
+		return items[i].nonce < items[j].nonce
+	})
+
+	result := make([]types.Tx, len(items))
+	for i, item := range items {
+		result[i] = item.raw
+	}
+	return result
+}
+
 // decodeTx decodes a raw transaction into a punnet-sdk Transaction.
 func (a *BAPIApplication) decodeTx(tx types.Tx) (*ptypes.Transaction, error) {
 	var ptx ptypes.Transaction
@@ -411,6 +526,90 @@ func (a *BAPIApplication) validateAuthorization(ctx context.Context, tx *ptypes.
 
 	// Verify authorization (signatures, weights, threshold)
 	if err := tx.VerifyAuthorization(account, a); err != nil {
+		return fmt.Errorf("verify authorization: %w", err)
+	}
+
+	return nil
+}
+
+// checkTxAuthorization validates authorization for CheckTx with pending nonce support.
+// Unlike validateAuthorization (used in ExecuteBlock which checks strictly against
+// committed state), this method tracks pending nonces so that multiple TXs from the
+// same account can be accepted into the mempool with sequential nonces.
+//
+// MempoolContext semantics:
+//
+//   - MempoolFirstSeen: the TX must arrive at the gate with nonce ==
+//     max(committed, pending). On accept, the pending nonce is bumped
+//     so the next first-seen sees the correct slot.
+//
+//   - MempoolRevalidation: the TX is being re-checked (typically after a
+//     new block committed). The original first-seen already bumped
+//     pending; we must NOT re-bump or pending drifts upward on every
+//     revalidation. The check is "is this TX's nonce still applicable
+//     given current committed state?" — i.e., committed ≤ tx.Nonce <
+//     pending. If tx.Nonce < committed, the block already executed
+//     this TX and the mempool should evict it (treat as nonce
+//     mismatch). If tx.Nonce ≥ pending, the TX was never accepted in
+//     the first place (also a mismatch).
+//
+// Either way, accept is conditional on the nonce check — drops
+// mismatched TXs at the gate so they never reach the block builder.
+func (a *BAPIApplication) checkTxAuthorization(ctx context.Context, tx *ptypes.Transaction, mctx types.MempoolContext) error {
+	// Get account from committed state
+	account, err := a.accountStore.Get(ctx, tx.Account)
+	if err != nil {
+		if err == store.ErrNotFound {
+			return fmt.Errorf("account not found: %s", tx.Account)
+		}
+		return fmt.Errorf("get account: %w", err)
+	}
+
+	// Determine expected nonce: max(committed, pending)
+	committedNonce := account.Nonce
+
+	a.pendingNonceMu.Lock()
+	pendingNonce, hasPending := a.pendingNonces[tx.Account]
+	expectedNonce := committedNonce
+	if hasPending && pendingNonce > expectedNonce {
+		expectedNonce = pendingNonce
+	}
+
+	if mctx == types.MempoolRevalidation {
+		// Revalidation: the mempool is asking "is this TX still
+		// applicable given current committed state?" Accept any TX
+		// whose nonce hasn't already been executed. Don't compare
+		// against pending — pendingNonces is cleared on every Commit,
+		// so a TX still in the mempool post-commit would otherwise
+		// be falsely rejected. Don't bump either — pending is the
+		// first-seen admission counter, not a per-TX tracker.
+		if tx.Nonce < committedNonce {
+			a.pendingNonceMu.Unlock()
+			return fmt.Errorf("nonce mismatch: revalidation tx.Nonce=%d < committed=%d (already executed)",
+				tx.Nonce, committedNonce)
+		}
+		a.pendingNonceMu.Unlock()
+	} else {
+		// MempoolFirstSeen (and any unknown value, treated as
+		// first-seen for forward compat): require strict match against
+		// the next free slot, then bump.
+		if tx.Nonce != expectedNonce {
+			a.pendingNonceMu.Unlock()
+			return fmt.Errorf("nonce mismatch: expected %d, got %d", expectedNonce, tx.Nonce)
+		}
+		if a.pendingNonces == nil {
+			a.pendingNonces = make(map[ptypes.AccountName]uint64)
+		}
+		a.pendingNonces[tx.Account] = expectedNonce + 1
+		a.pendingNonceMu.Unlock()
+	}
+
+	// Verify authorization (signatures, weights, threshold).
+	// Set account nonce to match TX nonce so VerifyAuthorization's internal
+	// nonce check passes -- we already validated it against pending state above.
+	accountCopy := *account
+	accountCopy.Nonce = tx.Nonce
+	if err := tx.VerifyAuthorization(&accountCopy, a); err != nil {
 		return fmt.Errorf("verify authorization: %w", err)
 	}
 
@@ -452,6 +651,31 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 
 	// Collect effects from all messages
 	var allEffects []effects.Effect
+
+	// AnteHandler stage. PLAN §7 Phase 0.4: run any registered ante
+	// handlers (fee deduction, spam guards, ...) between authorization
+	// and message dispatch. The first handler returning an error
+	// aborts the tx; subsequent handlers don't run.
+	//
+	// Today, AnteHandler effects are folded into the same atomic batch
+	// as the message-handler effects below — a handler failure rolls
+	// back the AnteHandler too. Phase 1.5 will split the commit so
+	// fees persist when the message handler aborts (spec §3's
+	// "failed-execution txs still pay").
+	a.mu.RLock()
+	anteChain := a.anteHandlers
+	a.mu.RUnlock()
+	for _, ante := range anteChain {
+		anteEffects, err := ante(ctx, txCtx, ptx)
+		if err != nil {
+			return types.TxOutcome{
+				Index: index,
+				Code:  20, // distinct from handler errors so apps can tell them apart
+				Info:  fmt.Sprintf("ante: %v", err),
+			}, nil
+		}
+		allEffects = append(allEffects, anteEffects...)
+	}
 
 	for _, msg := range ptx.Messages {
 		// Get handler
@@ -577,6 +801,114 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 	return nil
 }
 
+// ExportGenesis produces a `types.GenesisDoc` reflecting the
+// application's current committed state — chain ID, consensus params,
+// validator set, and each module's app-level genesis state. The
+// resulting doc can be used to bootstrap a fresh chain identical (at
+// the BAPI layer) to this one's tip.
+//
+// Determinism: modules are walked in name-sorted order; the validator
+// set is iterated in the staking store's deterministic order then
+// sorted by hex-encoded pubkey. As long as every module's
+// ExportGenesis is itself deterministic, the resulting doc bytes are
+// byte-identical across nodes that ran the same blocks.
+//
+// Returns an error if any module's ExportGenesis fails or if the
+// per-module JSON cannot be merged into the application-level state.
+// The validator set falls back to an empty list if the underlying
+// store doesn't implement Iterable (test in-memory backend).
+func (a *BAPIApplication) ExportGenesis(ctx context.Context) (*types.GenesisDoc, error) {
+	if a == nil {
+		return nil, fmt.Errorf("application is nil")
+	}
+
+	// 1. Snapshot consensus params.
+	var params types.ConsensusParams
+	if a.paramsStore != nil {
+		if p, err := a.paramsStore.Get(ctx); err == nil && p != nil {
+			params = *p
+		}
+	}
+
+	// 2. Snapshot the current validator set. We walk the staking
+	// module's validator store (the source of truth for power /
+	// jail status) — this means we work even when the engine's
+	// consensus-side set isn't directly addressable from here.
+	var validators []types.ValidatorUpdate
+	if a.validatorStore != nil {
+		_ = a.validatorStore.IterateValidators(func(v *store.BAPIValidator) bool {
+			// Skip jailed / zero-power validators: they should not
+			// be in the new chain's active set on restart. If the
+			// operator wants them back, they unjail post-genesis.
+			if v.Jailed || v.Power == 0 {
+				return false
+			}
+			validators = append(validators, types.ValidatorUpdate{
+				PubKey: v.PubKey,
+				Power:  v.Power,
+			})
+			return false
+		})
+		// Defensive sort so we don't depend on the underlying iteration
+		// order being stable forever.
+		sort.Slice(validators, func(i, j int) bool {
+			return string(validators[i].PubKey.Data) < string(validators[j].PubKey.Data)
+		})
+	}
+
+	// 3. Aggregate each module's ExportGenesis output into BAPIGenesisState.
+	modules := a.router.Modules()
+	sortedModules := make([]BAPIModule, len(modules))
+	copy(sortedModules, modules)
+	sort.Slice(sortedModules, func(i, j int) bool {
+		return sortedModules[i].Name() < sortedModules[j].Name()
+	})
+	moduleState := make(map[string]json.RawMessage)
+	for _, mod := range sortedModules {
+		exporter, ok := mod.(BAPIGenesisExporter)
+		if !ok {
+			continue
+		}
+		raw, err := exporter.ExportGenesis(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("module %s ExportGenesis: %w", mod.Name(), err)
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		moduleState[mod.Name()] = json.RawMessage(raw)
+	}
+	appState, err := json.Marshal(BAPIGenesisState{Modules: moduleState})
+	if err != nil {
+		return nil, fmt.Errorf("marshal app state: %w", err)
+	}
+
+	// 4. Assemble the GenesisDoc. Pull height/time from the current
+	// header if we're inside a block; otherwise use the state-store
+	// version and wall-clock time as a best-effort floor.
+	a.mu.RLock()
+	header := a.currentBlock
+	a.mu.RUnlock()
+	var height uint64
+	var genTime types.Timestamp
+	if header != nil {
+		height = header.Height
+		genTime = header.Time
+	} else if a.stateStore != nil {
+		height = uint64(a.stateStore.Version())
+		genTime = types.TimeToTimestamp(time.Now())
+	}
+
+	return &types.GenesisDoc{
+		ChainID:         a.chainID,
+		GenesisTime:     genTime,
+		InitialHeight:   height,
+		ConsensusParams: params,
+		Validators:      validators,
+		AppState:        appState,
+	}, nil
+}
+
 // runBeginBlockHooks runs all module begin-block hooks.
 func (a *BAPIApplication) runBeginBlockHooks(ctx context.Context, blockCtx *BAPIBlockContext) ([]types.Event, error) {
 	modules := a.router.Modules()
@@ -663,17 +995,84 @@ func (a *BAPIApplication) runEndBlockHooks(ctx context.Context, blockCtx *BAPIBl
 	// Deduplicate validator updates
 	validatorUpdates := deduplicateBAPIValidatorUpdates(allValidatorUpdates)
 
-	// Check for consensus params updates
+	// Collect consensus-params updates from modules implementing
+	// BAPIParamsUpdater. Walked in name-sorted order (same as the
+	// EndBlock hooks above) so multi-module behavior is deterministic.
+	// At most one module may emit a non-nil update per block; a second
+	// non-nil update is rejected with an error so silent overwrites
+	// don't produce divergent chain state.
 	var paramsUpdate *types.ConsensusParams
-	// TODO: Implement consensus params update collection from modules
+	var paramsUpdater string
+	for _, mod := range sortedModules {
+		updater, ok := mod.(BAPIParamsUpdater)
+		if !ok {
+			continue
+		}
+		next, err := updater.ParamsUpdate(ctx, blockCtx)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("module %s ParamsUpdate: %w", mod.Name(), err)
+		}
+		if next == nil {
+			continue
+		}
+		if paramsUpdate != nil {
+			return nil, nil, nil, fmt.Errorf("conflicting params updates: %s and %s both emitted at height %d",
+				paramsUpdater, mod.Name(), blockCtx.Height)
+		}
+		paramsUpdate = next
+		paramsUpdater = mod.Name()
+	}
+
+	// Persist the update so the next block sees it via the params
+	// snapshot taken in processBlock. Without this, the change is
+	// returned to the consumer but never observed by the next block.
+	if paramsUpdate != nil && a.paramsStore != nil {
+		if err := a.paramsStore.Set(ctx, paramsUpdate); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist params update from %s: %w", paramsUpdater, err)
+		}
+	}
 
 	return validatorUpdates, paramsUpdate, events, nil
 }
 
 // processEvidence processes misbehavior evidence.
+//
+// Every module that implements BAPIEvidenceHandler gets a chance to act on
+// the evidence — typically the staking module, which slashes the offending
+// validator. We collect the effects from all handlers, then execute them
+// through the same effects executor that handles tx and block-lifecycle
+// effects, so consensus-critical state changes (validator power, jail
+// status, …) follow the same effects-not-mutations invariant the rest of
+// the SDK enforces (PLAN C2). Modules are iterated in name-sorted order
+// for determinism, matching runBeginBlockHooks / runEndBlockHooks.
 func (a *BAPIApplication) processEvidence(ctx context.Context, blockCtx *BAPIBlockContext, evidence types.Evidence) error {
-	// TODO: Implement evidence processing (slashing)
-	// For now, just log the evidence
+	modules := a.router.Modules()
+	sortedModules := make([]BAPIModule, len(modules))
+	copy(sortedModules, modules)
+	sort.Slice(sortedModules, func(i, j int) bool {
+		return sortedModules[i].Name() < sortedModules[j].Name()
+	})
+
+	var allEffects []effects.Effect
+	for _, mod := range sortedModules {
+		handler, ok := mod.(BAPIEvidenceHandler)
+		if !ok {
+			continue
+		}
+		modEffects, err := handler.ProcessEvidence(ctx, blockCtx, evidence)
+		if err != nil {
+			return fmt.Errorf("module %s ProcessEvidence: %w", mod.Name(), err)
+		}
+		allEffects = append(allEffects, modEffects...)
+	}
+
+	if len(allEffects) == 0 {
+		return nil
+	}
+
+	if _, err := a.effectExecutor.Execute(allEffects); err != nil {
+		return fmt.Errorf("execute evidence effects: %w", err)
+	}
 	return nil
 }
 
@@ -751,11 +1150,17 @@ func deduplicateBAPIValidatorUpdates(updates []types.ValidatorUpdate) []types.Va
 }
 
 // BAPIBlockContext contains block-level execution context.
+//
+// Params is the ConsensusParams snapshot at the start of this block.
+// nil when the application hasn't been initialized with a params store
+// (e.g. very early in tests); callers should fall back to compiled-in
+// defaults in that case.
 type BAPIBlockContext struct {
 	Height   uint64
 	Time     types.Timestamp
 	Proposer types.ValidatorAddress
 	ChainID  string
+	Params   *types.ConsensusParams
 }
 
 // BAPITxContext contains transaction-level execution context.
@@ -800,4 +1205,24 @@ func (a *BAPIApplication) Router() *BAPIRouter {
 		return nil
 	}
 	return a.router
+}
+
+// RegisterAnteHandler appends a handler to the AnteHandler chain.
+// The chain runs in registration order in executeTx, after
+// authorization validation and before module message handlers.
+//
+// Apps typically register all their AnteHandlers during construction
+// (before any block is executed). Registering at runtime is permitted
+// but not encouraged: the AnteHandler set is part of the deterministic
+// state-transition function, so a node that flips the chain mid-life
+// will diverge from peers that didn't.
+//
+// PLAN §7 Phase 0.4 / Phase 1.4.
+func (a *BAPIApplication) RegisterAnteHandler(handler AnteHandler) {
+	if a == nil || handler == nil {
+		return
+	}
+	a.mu.Lock()
+	a.anteHandlers = append(a.anteHandlers, handler)
+	a.mu.Unlock()
 }
