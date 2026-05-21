@@ -40,6 +40,12 @@ type BAPIApplication struct {
 	// adds the framework; Phase 1.4 wires the fee handler.
 	anteHandlers []AnteHandler
 
+	// tokenomicsGenesis is the chain-wide tokenomics parameters
+	// parsed from BAPIGenesisState.Tokenomics at genesis. nil for
+	// non-tokenomics chains; downstream modules consult via the
+	// TokenomicsGenesis() accessor. PLAN §7 Phase 0.5.
+	tokenomicsGenesis *TokenomicsGenesis
+
 	// Typed stores (created from StateStore)
 	accountStore   *store.BAPIAccountStore
 	balanceStore   *store.BAPIBalanceStore
@@ -760,6 +766,19 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 		}
 	}
 
+	// Tokenomics genesis: validate and cache so downstream modules
+	// (bank for protocol-account seeding, mint for VRP, etc.) can
+	// consult the same parsed values. Optional — nil skips
+	// tokenomics enforcement. PLAN §7 Phase 0.5.
+	if genesisState.Tokenomics != nil {
+		if err := genesisState.Tokenomics.ValidateBasic(); err != nil {
+			return fmt.Errorf("invalid tokenomics genesis: %w", err)
+		}
+		a.mu.Lock()
+		a.tokenomicsGenesis = genesisState.Tokenomics
+		a.mu.Unlock()
+	}
+
 	// Get all modules and sort for deterministic initialization
 	modules := a.router.Modules()
 	sortedModules := make([]BAPIModule, len(modules))
@@ -1172,7 +1191,21 @@ type BAPITxContext struct {
 
 // BAPIGenesisState represents the genesis app state structure.
 type BAPIGenesisState struct {
+	// Modules carries per-module genesis blobs, keyed by module
+	// name. Each value is opaque to the runtime; the owning module's
+	// InitGenesis hook decodes it.
 	Modules map[string]json.RawMessage `json:"modules"`
+
+	// Tokenomics carries chain-wide tokenomics parameters that
+	// must be known at chain construction (total supply, bootstrap
+	// validators). Optional — nil means the runtime does not
+	// enforce the tokenomics supply model. PLAN §7 Phase 0.5.
+	//
+	// When set, ValidateBasic is invoked from initGenesis before
+	// any module genesis blob is processed; downstream modules
+	// (bank, mint, distribution, staking) consult these values
+	// via BAPIApplication.TokenomicsGenesis().
+	Tokenomics *TokenomicsGenesis `json:"tokenomics,omitempty"`
 }
 
 // ChainID returns the chain identifier.
@@ -1205,6 +1238,23 @@ func (a *BAPIApplication) Router() *BAPIRouter {
 		return nil
 	}
 	return a.router
+}
+
+// TokenomicsGenesis returns the parsed TokenomicsGenesis from the
+// chain's initial app state, or nil if the chain wasn't initialised
+// with one (non-tokenomics chains). Downstream modules — bank for
+// protocol-account seeding, mint for VRP draining, distribution for
+// epoch accounting — consult this to wire genesis state consistently.
+//
+// Safe for concurrent reads; the value is set once at initGenesis
+// and never mutated thereafter. PLAN §7 Phase 0.5.
+func (a *BAPIApplication) TokenomicsGenesis() *TokenomicsGenesis {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.tokenomicsGenesis
 }
 
 // RegisterAnteHandler appends a handler to the AnteHandler chain.
