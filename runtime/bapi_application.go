@@ -770,13 +770,14 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 	// (bank for protocol-account seeding, mint for VRP, etc.) can
 	// consult the same parsed values. Optional — nil skips
 	// tokenomics enforcement. PLAN §7 Phase 0.5.
+	//
+	// No locking here: Handshake (the only caller) already holds
+	// a.mu, and Go's RWMutex is not reentrant.
 	if genesisState.Tokenomics != nil {
 		if err := genesisState.Tokenomics.ValidateBasic(); err != nil {
 			return fmt.Errorf("invalid tokenomics genesis: %w", err)
 		}
-		a.mu.Lock()
 		a.tokenomicsGenesis = genesisState.Tokenomics
-		a.mu.Unlock()
 	}
 
 	// Get all modules and sort for deterministic initialization
@@ -803,6 +804,40 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 		// Initialize module
 		if err := initializer.InitGenesis(ctx, moduleGenesis); err != nil {
 			return fmt.Errorf("init genesis for %s: %w", mod.Name(), err)
+		}
+	}
+
+	// Seed protocol module accounts from TokenomicsGenesis. PLAN §7
+	// Phase 0.6 / decision D5. This runs AFTER all module
+	// InitGenesis hooks so the balance store is already wired and
+	// the bank module's own genesis balances (e.g., airdrop
+	// recipients) are in place. The four protocol accounts —
+	// module.vrp, module.ct, module.eco, module.bl — get their
+	// initial allocations from TokenomicsGenesis.InitialAllocations,
+	// which guarantees the five-way split sums exactly to
+	// TotalSupply (the bootstrap allocation absorbs any rounding).
+	if a.tokenomicsGenesis != nil && a.balanceStore != nil {
+		vrp, ct, ad, eco, bs := a.tokenomicsGenesis.InitialAllocations()
+		_ = ad // airdrop recipients carry their own balances via bank's GenesisBalance list
+		seeds := []struct {
+			name   ptypes.AccountName
+			amount uint64
+		}{
+			{ModuleAccountVRP, vrp},
+			{ModuleAccountCT, ct},
+			{ModuleAccountEcosystem, eco},
+			{ModuleAccountBootstrap, bs},
+		}
+		// Denom: the chain's base unit. For Phase 0.6 we use a
+		// fixed "stake" denom — punnet-sdk doesn't have a
+		// canonical base-denom symbol yet, and the test apps in
+		// the tree already use "stake". Phase 1.x can replace
+		// this with a chain-configurable denom if/when needed.
+		const baseDenom = "stake"
+		for _, s := range seeds {
+			if err := a.balanceStore.Set(ctx, string(s.name), baseDenom, s.amount); err != nil {
+				return fmt.Errorf("seed protocol account %s: %w", s.name, err)
+			}
 		}
 	}
 
