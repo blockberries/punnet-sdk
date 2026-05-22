@@ -100,7 +100,7 @@ func TestBAPIAuthModule_HandleCreateAccount(t *testing.T) {
 		assert.Len(t, effs, 2)
 
 		// Check it's a write effect
-		writeEff, ok := effs[0].(effects.WriteEffect[*ptypes.Account])
+		writeEff, ok := effs[0].(*effects.WriteEffect[*ptypes.Account])
 		assert.True(t, ok)
 		assert.Equal(t, "accounts", writeEff.Store)
 		assert.Equal(t, []byte(accountName), writeEff.StoreKey)
@@ -112,7 +112,7 @@ func TestBAPIAuthModule_HandleCreateAccount(t *testing.T) {
 		assert.Equal(t, "account.created", eventEff.EventType)
 	})
 
-	t.Run("fails when account name doesn't match signer", func(t *testing.T) {
+	t.Run("allows different account to create another", func(t *testing.T) {
 		txCtx := &runtime.BAPITxContext{
 			BAPIBlockContext: blockCtx,
 			Account:          ptypes.AccountName("alice"),
@@ -120,8 +120,9 @@ func TestBAPIAuthModule_HandleCreateAccount(t *testing.T) {
 		}
 
 		msg := &MsgCreateAccount{
-			Name:   ptypes.AccountName("bob"), // Different from signer
-			PubKey: []byte("testpubkey12345678901234567890"),
+			Creator: ptypes.AccountName("alice"),
+			Name:    ptypes.AccountName("bob"),
+			PubKey:  []byte("testpubkey12345678901234567890"),
 			Authority: ptypes.Authority{
 				Threshold:      1,
 				KeyWeights:     map[string]uint64{"testpubkey12345678901234567890": 1},
@@ -129,9 +130,13 @@ func TestBAPIAuthModule_HandleCreateAccount(t *testing.T) {
 			},
 		}
 
-		_, err := mod.handleCreateAccount(ctx, txCtx, msg)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "account name must match transaction account")
+		effs, err := mod.handleCreateAccount(ctx, txCtx, msg)
+		require.NoError(t, err)
+		assert.Len(t, effs, 2)
+
+		writeEff, ok := effs[0].(*effects.WriteEffect[*ptypes.Account])
+		assert.True(t, ok)
+		assert.Equal(t, ptypes.AccountName("bob"), writeEff.Value.Name)
 	})
 
 	t.Run("fails when account already exists", func(t *testing.T) {
@@ -251,7 +256,7 @@ func TestBAPIAuthModule_HandleUpdateAuthority(t *testing.T) {
 		assert.Len(t, effs, 2)
 
 		// Check the write effect contains the new authority
-		writeEff := effs[0].(effects.WriteEffect[*ptypes.Account])
+		writeEff := effs[0].(*effects.WriteEffect[*ptypes.Account])
 		assert.Equal(t, uint64(2), writeEff.Value.Authority.Threshold)
 		assert.Len(t, writeEff.Value.Authority.KeyWeights, 2)
 		// Nonce should be preserved

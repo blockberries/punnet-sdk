@@ -19,8 +19,13 @@ const (
 	TypeMsgDeleteAccount   = "/punnet.auth.v1.MsgDeleteAccount"
 )
 
-// MsgCreateAccount creates a new account
+// MsgCreateAccount creates a new account.
+// Creator is the existing account that submits the creation.
+// If Creator is empty, it defaults to Name (self-creation).
 type MsgCreateAccount struct {
+	// Creator is the account authorizing the creation (can differ from Name)
+	Creator types.AccountName `json:"creator,omitempty"`
+
 	// Name is the new account name
 	Name types.AccountName `json:"name"`
 
@@ -42,6 +47,10 @@ func (m *MsgCreateAccount) ValidateBasic() error {
 		return fmt.Errorf("message is nil")
 	}
 
+	if m.Creator != "" && !m.Creator.IsValid() {
+		return fmt.Errorf("%w: invalid creator account %s", types.ErrInvalidAccount, m.Creator)
+	}
+
 	if !m.Name.IsValid() {
 		return fmt.Errorf("%w: invalid account name %s", types.ErrInvalidAccount, m.Name)
 	}
@@ -57,12 +66,15 @@ func (m *MsgCreateAccount) ValidateBasic() error {
 	return nil
 }
 
-// GetSigners returns the accounts that must authorize this message
+// GetSigners returns the accounts that must authorize this message.
+// If Creator is set, the creator must sign. Otherwise the new account signs.
 func (m *MsgCreateAccount) GetSigners() []types.AccountName {
 	if m == nil {
 		return nil
 	}
-	// The account creating itself must sign
+	if m.Creator != "" {
+		return []types.AccountName{m.Creator}
+	}
 	return []types.AccountName{m.Name}
 }
 

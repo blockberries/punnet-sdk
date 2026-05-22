@@ -76,10 +76,45 @@ func (m *BAPIAuthModule) InitGenesis(ctx context.Context, data []byte) error {
 }
 
 // ExportGenesis exports the module's state for genesis.
+//
+// Walks the BAPIAccountStore's in-memory key index (TrackedKeys) and reads
+// each account; the returned AuthGenesisState contains every account the
+// module is aware of in sorted-by-name order. PLAN B2-5 replaces the prior
+// hard-coded empty list, which produced unusable exports.
+//
+// Caveat: the key index is maintained in-memory and may not survive a process
+// restart that did not also re-seed it via InitGenesis or Set. For the
+// genesis-export use case (taking a snapshot of a running chain), the index
+// is sufficient. See BAPIAccountStore.TrackedKeys for the limitations.
 func (m *BAPIAuthModule) ExportGenesis(ctx context.Context) ([]byte, error) {
-	// For now, return empty state - full export would require iteration
+	if m == nil || m.accountStore == nil {
+		return nil, fmt.Errorf("module or store is nil")
+	}
+
+	names := m.accountStore.TrackedKeys()
+	accounts := make([]*types.Account, 0, len(names))
+
+	for _, name := range names {
+		accountName := types.AccountName(name)
+		if !accountName.IsValid() {
+			// Tracker contained an invalid name — skip rather than failing
+			// the entire export.
+			continue
+		}
+		account, err := m.accountStore.Get(ctx, accountName)
+		if err != nil {
+			// Stale tracker entry (account was deleted via a path that
+			// didn't notify the tracker). Skip it.
+			continue
+		}
+		if account == nil {
+			continue
+		}
+		accounts = append(accounts, account)
+	}
+
 	genesisState := AuthGenesisState{
-		Accounts: []*types.Account{},
+		Accounts: accounts,
 	}
 	return json.Marshal(genesisState)
 }
@@ -101,11 +136,6 @@ func (m *BAPIAuthModule) handleCreateAccount(ctx context.Context, txCtx *runtime
 	createMsg, ok := msg.(*MsgCreateAccount)
 	if !ok {
 		return nil, fmt.Errorf("invalid message type: expected *MsgCreateAccount, got %T", msg)
-	}
-
-	// Verify the account creating itself is the transaction signer
-	if createMsg.Name != txCtx.Account {
-		return nil, fmt.Errorf("account name must match transaction account")
 	}
 
 	// Check if account already exists
@@ -143,7 +173,7 @@ func (m *BAPIAuthModule) handleCreateAccount(ctx context.Context, txCtx *runtime
 
 	// Return write effect for the account
 	return []effects.Effect{
-		effects.WriteEffect[*types.Account]{
+		&effects.WriteEffect[*types.Account]{
 			Store:    "accounts",
 			StoreKey: []byte(createMsg.Name),
 			Value:    account,
@@ -197,7 +227,7 @@ func (m *BAPIAuthModule) handleUpdateAuthority(ctx context.Context, txCtx *runti
 
 	// Return write effect for the updated account
 	return []effects.Effect{
-		effects.WriteEffect[*types.Account]{
+		&effects.WriteEffect[*types.Account]{
 			Store:    "accounts",
 			StoreKey: []byte(updateMsg.Name),
 			Value:    account,
@@ -250,6 +280,29 @@ func (m *BAPIAuthModule) handleDeleteAccount(ctx context.Context, txCtx *runtime
 	}, nil
 }
 
+// parseAccountName extracts an account name from query data.
+// Accepts either raw bytes (the account name directly) or JSON like {"name":"alice"}.
+func parseAccountName(data []byte) (types.AccountName, error) {
+	// Try raw bytes first
+	name := types.AccountName(data)
+	if name.IsValid() {
+		return name, nil
+	}
+
+	// Try JSON-encoded {"name":"..."}
+	var q struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &q); err == nil && q.Name != "" {
+		name = types.AccountName(q.Name)
+		if name.IsValid() {
+			return name, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: invalid account name", types.ErrInvalidAccount)
+}
+
 // handleQueryAccount handles account queries.
 func (m *BAPIAuthModule) handleQueryAccount(ctx context.Context, data []byte, height int64) ([]byte, error) {
 	if m == nil || m.accountStore == nil {
@@ -257,13 +310,12 @@ func (m *BAPIAuthModule) handleQueryAccount(ctx context.Context, data []byte, he
 	}
 
 	// Parse account name from data
-	name := types.AccountName(data)
-	if !name.IsValid() {
-		return nil, fmt.Errorf("%w: invalid account name", types.ErrInvalidAccount)
+	name, err := parseAccountName(data)
+	if err != nil {
+		return nil, err
 	}
 
 	var account *types.Account
-	var err error
 
 	// Get account at specific height if requested
 	if height > 0 {
@@ -287,9 +339,9 @@ func (m *BAPIAuthModule) handleQueryNonce(ctx context.Context, data []byte, heig
 	}
 
 	// Parse account name from data
-	name := types.AccountName(data)
-	if !name.IsValid() {
-		return nil, fmt.Errorf("%w: invalid account name", types.ErrInvalidAccount)
+	name, err := parseAccountName(data)
+	if err != nil {
+		return nil, err
 	}
 
 	var nonce uint64
