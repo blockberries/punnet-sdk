@@ -96,11 +96,13 @@ func Build() (*Realistic, error) {
 		return nil, fmt.Errorf("register fees as gov target: %w", err)
 	}
 
-	// Phase 3.6 wiring: distribution registers as a slash
-	// observer so it can end the validator's period before the
-	// slash applies. Without this, F1 reward math underpays
-	// pre-slash delegators.
+	// Phase 3.6 wiring: distribution registers as a slash observer
+	// (RecordSlash on each evidence) and a delegation observer
+	// (SnapshotDelegation on each delegate/undelegate). Both hooks
+	// are required for the F1 reward walk to credit delegators
+	// correctly across stake-modification + slash events.
 	stakingMod.RegisterSlashObserver(distMod)
+	stakingMod.RegisterDelegationObserver(distMod)
 	if err := govMod.Parameters.Register(governance.ParameterBand{
 		Name:    "byte_fee",
 		SoftMin: 0, SoftMax: 100,

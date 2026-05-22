@@ -57,6 +57,12 @@ type BAPIStakingModule struct {
 	// already jailed or tombstoned (the distribution side cares
 	// about the period boundary, not the final validator status).
 	slashObservers []SlashObserver
+
+	// delegationObservers receive a notification AFTER a delegation
+	// modification (delegate/undelegate) is computed but before its
+	// effect commits. Distribution uses this to snapshot the
+	// delegator's new stake + PreviousPeriod for the F1 walk.
+	delegationObservers []DelegationObserver
 }
 
 // SlashObserver is the optional hook for modules that need to
@@ -78,6 +84,37 @@ func (m *BAPIStakingModule) RegisterSlashObserver(obs SlashObserver) {
 		return
 	}
 	m.slashObservers = append(m.slashObservers, obs)
+}
+
+// DelegationObserver is the optional hook for modules that need
+// to react to delegation modifications (delegate, undelegate).
+// The distribution module uses this to call SnapshotDelegation —
+// without it the F1 reward walk on claim sees the wrong
+// PreviousPeriod and credits the delegator at the wrong stake.
+//
+// SnapshotDelegation is called AFTER the staking-side stake
+// change has been computed but BEFORE the effect that persists
+// it. The newStakeMicro argument carries the post-modification
+// amount. Mirrors cosmos-sdk x/staking's
+// AfterDelegationModified hook.
+//
+// **UX caveat:** outstanding rewards accrued before the
+// modification are NOT auto-claimed by SnapshotDelegation —
+// they're "sealed into the past" by the period bump and the
+// next claim won't see them. Production chains should encourage
+// delegators to claim before modifying, or layer an auto-claim
+// effect into the delegate handler. PLAN §7 Phase 3.6.
+type DelegationObserver interface {
+	SnapshotDelegation(ctx context.Context, delegator ptypes.AccountName, validatorPubKey []byte, newStakeMicro uint64) error
+}
+
+// RegisterDelegationObserver appends an observer to the
+// delegation-modify notification chain.
+func (m *BAPIStakingModule) RegisterDelegationObserver(obs DelegationObserver) {
+	if obs == nil {
+		return
+	}
+	m.delegationObservers = append(m.delegationObservers, obs)
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -1075,6 +1112,20 @@ func (m *BAPIStakingModule) handleDelegate(ctx context.Context, txCtx *runtime.B
 			ptypes.ErrInsufficientFunds, balance, delegateMsg.Amount.Amount)
 	}
 
+	// Phase 3.6 — notify delegation observers with the post-modification
+	// stake. The current delegation amount (if any) + this delegate
+	// is the new total stake the F1 walk will use.
+	currentDelegation, _ := m.validatorStore.GetDelegation(ctx, string(delegateMsg.Delegator), delegateMsg.Validator)
+	newStake := delegateMsg.Amount.Amount
+	if currentDelegation != nil {
+		newStake += currentDelegation.Amount
+	}
+	for _, obs := range m.delegationObservers {
+		if err := obs.SnapshotDelegation(ctx, delegateMsg.Delegator, delegateMsg.Validator, newStake); err != nil {
+			return nil, fmt.Errorf("delegation observer: %w", err)
+		}
+	}
+
 	// Return effects: transfer tokens to staking pool and update delegation
 	return []effects.Effect{
 		// Transfer tokens from delegator to staking pool
@@ -1185,6 +1236,14 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 		Amount:          delegation.Amount - undelegateMsg.Amount.Amount,
 	}
 	delegationStoreKey := string(undelegateMsg.Delegator) + "/" + hex.EncodeToString(undelegateMsg.Validator)
+
+	// Phase 3.6: notify delegation observers BEFORE building the
+	// effects so they snapshot at the new stake amount.
+	for _, obs := range m.delegationObservers {
+		if err := obs.SnapshotDelegation(ctx, undelegateMsg.Delegator, undelegateMsg.Validator, updatedDelegation.Amount); err != nil {
+			return nil, fmt.Errorf("delegation observer: %w", err)
+		}
+	}
 
 	// Validator's TotalDelegation drops immediately even though the
 	// tokens themselves wait 21 days. Phase 2.3: the next epoch-close
