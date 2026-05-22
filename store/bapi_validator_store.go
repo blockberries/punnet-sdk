@@ -515,3 +515,19 @@ func (s *BAPIValidatorStore) IterateBootstrapInfos(fn func(info *BAPIBootstrapIn
 		return fn(info)
 	})
 }
+
+// IterateDelegations walks every delegation row, invoking fn for
+// each. Used by Phase 2.6's slashing pass to apply the proportional
+// burn to each delegator. Return true from fn to stop early.
+//
+// Returns ErrIterationUnsupported if the underlying StateStore is
+// not iterable. Iteration order is the underlying tree's ascending
+// byte order over the "delegator/<hex pubkey>" keys.
+func (s *BAPIValidatorStore) IterateDelegations(fn func(d *BAPIDelegation) bool) error {
+	return s.delegations.IterateRelative(func(_ string, d *BAPIDelegation) bool {
+		if d == nil {
+			return false
+		}
+		return fn(d)
+	})
+}

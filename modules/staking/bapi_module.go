@@ -120,13 +120,31 @@ func IsEpochCloseHeight(height uint64) bool {
 // production path reads `blockCtx.Params.SlashFraction*Bps`; the
 // constants below are also exported because callers may want to
 // reference them when constructing test genesis blobs.
+//
+// Spec §9 severity table — PLAN §7 Phase 2.6:
+//   - equivocation (double-vote)  : 5%   = 500 bps
+//   - liveness (extended downtime): 0.1% =  10 bps
+//   - leader equivocation         : 5%   = 500 bps
 const (
-	// DefaultSlashFractionDoubleSignBps: 500 = 5%.
+	// DefaultSlashFractionDoubleSignBps: 500 = 5%. Applied for
+	// `EvidenceTypeDuplicateVote` — a validator that signed two
+	// conflicting blocks at the same height.
 	DefaultSlashFractionDoubleSignBps uint32 = 500
 	// DefaultSlashFractionLightClientBps: 1000 = 10%. Strictly higher
 	// than double-sign: light-client attacks target external observers
 	// who can't independently verify the slashable event.
 	DefaultSlashFractionLightClientBps uint32 = 1000
+	// DefaultSlashFractionLivenessBps: 10 = 0.1%. Smallest severity
+	// in the table; applied for prolonged downtime once a missed-
+	// block tracker (out of scope for Phase 2.6 — needs a per-block
+	// witnesses field in the FinalizedBlock that bapi doesn't carry
+	// yet) crosses its threshold.
+	DefaultSlashFractionLivenessBps uint32 = 10
+	// DefaultSlashFractionLeaderEquivocationBps: 500 = 5%. Same
+	// severity as double-vote but distinct in intent: a leader that
+	// proposes two valid-but-different blocks for the same round.
+	// Wire support pending in bapi's Evidence types.
+	DefaultSlashFractionLeaderEquivocationBps uint32 = 500
 )
 
 // UnbondingPeriodBlocks is the chain-wide unbonding-period length in
@@ -180,32 +198,20 @@ func slashFractionFor(params *types.ConsensusParams, evType types.EvidenceType) 
 }
 
 // ProcessEvidence reacts to Byzantine evidence by slashing the offending
-// validator. Implements runtime.BAPIEvidenceHandler (PLAN C2).
+// validator. Implements runtime.BAPIEvidenceHandler.
 //
-// Both DuplicateVote and LightClient evidence types result in a slash +
-// jail. Unknown future types are accepted silently for forward
-// compatibility. The handler:
+// Phase 2.6 / spec §9: the slash applies proportionally to the
+// validator's TotalDelegation (validator self-stake + all
+// delegators). The slashed tokens are transferred from staking.pool
+// to module.ct (Common Treasury). The validator is jailed.
 //
-//  1. Resolves the validator by the PubKey carried in the evidence
-//     (raspberry's BlockExecutorAdapter populates this from the engine's
-//     ValidatorSet; if absent we have no slashing target and skip).
-//  2. Computes the new power: old - old * slashFractionBps / 10000
-//     (saturating to zero). The fraction comes from `blockCtx.Params`
-//     when set, otherwise from compiled-in defaults. The validator is
-//     marked Jailed.
-//  3. Emits a WriteEffect carrying the updated validator and marks the
-//     pubkey dirty so EndBlock will emit a ValidatorUpdate with the
-//     post-slash power.
-//
-// Returns no error if the validator is unknown — evidence about a
-// validator who has already been removed is a no-op rather than a fatal
-// condition. The chain must keep running.
+// Unknown evidence types are silently accepted for forward
+// compatibility; unresolvable pubkeys emit an event but don't halt
+// the chain.
 func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runtime.BAPIBlockContext, evidence types.Evidence) ([]effects.Effect, error) {
 	if m == nil || m.validatorStore == nil {
 		return nil, fmt.Errorf("module or store is nil")
 	}
-	// Slash on DuplicateVote and LightClient; unknown future types
-	// are silently accepted.
 	var reason string
 	switch evidence.Type {
 	case types.EvidenceTypeDuplicateVote:
@@ -217,8 +223,6 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 	}
 	slashBps := uint64(slashFractionFor(blockCtx.Params, evidence.Type))
 	if len(evidence.PubKey.Data) == 0 {
-		// No pubkey means we cannot look up the validator. Log via event
-		// so operators can see this — but do not halt the chain.
 		return []effects.Effect{
 			effects.NewEventEffect("staking.evidence_unresolved", map[string][]byte{
 				"height": []byte(fmt.Sprintf("%d", blockCtx.Height)),
@@ -229,7 +233,6 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 
 	validator, err := m.validatorStore.GetValidator(ctx, evidence.PubKey.Data)
 	if err != nil || validator == nil {
-		// Already removed or never existed — emit an event and move on.
 		return []effects.Effect{
 			effects.NewEventEffect("staking.evidence_unknown_validator", map[string][]byte{
 				"height":  []byte(fmt.Sprintf("%d", blockCtx.Height)),
@@ -238,44 +241,109 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 		}, nil
 	}
 
-	// Compute new power. Saturating subtraction guards against the
-	// (impossible-in-practice but easy-to-reason-about) underflow case
-	// where the fraction calculation rounds upward.
+	// Phase 2.6: slash from the entire TotalDelegation, not just
+	// Power. The amount routed to CT mirrors the delegator-side
+	// burn so supply is conserved end-to-end.
 	prevPower := validator.Power
-	slashAmt := (prevPower * slashBps) / 10000
-	if slashAmt > prevPower {
-		slashAmt = prevPower
+	slashAmt := (validator.TotalDelegation * slashBps) / 10000
+	if slashAmt > validator.TotalDelegation {
+		slashAmt = validator.TotalDelegation
 	}
-	newPower := prevPower - slashAmt
+	newTotal := validator.TotalDelegation - slashAmt
+	newPower := newTotal // Power derives from TotalDelegation in v1.
 
-	updated := &store.BAPIValidator{
+	updatedValidator := &store.BAPIValidator{
 		PubKey:          validator.PubKey,
 		Power:           newPower,
 		Jailed:          true,
 		Description:     validator.Description,
 		Commission:      validator.Commission,
-		TotalDelegation: validator.TotalDelegation,
+		TotalDelegation: newTotal,
 	}
 
-	// Phase 2.3: no dirty-flag — the slash's reduced power surfaces
-	// in the next epoch-close EndBlock when the top-N is recomputed
-	// from store. Per spec D6, mid-epoch power changes accumulate.
-
-	return []effects.Effect{
+	outEffects := []effects.Effect{
 		&effects.WriteEffect[*store.BAPIValidator]{
 			Store:    "validators",
 			StoreKey: []byte(hex.EncodeToString(evidence.PubKey.Data)),
-			Value:    updated,
+			Value:    updatedValidator,
 		},
-		effects.NewEventEffect("staking.validator_slashed", map[string][]byte{
-			"pub_key":    []byte(hex.EncodeToString(evidence.PubKey.Data)),
-			"prev_power": []byte(fmt.Sprintf("%d", prevPower)),
-			"new_power":  []byte(fmt.Sprintf("%d", newPower)),
-			"slash_amt":  []byte(fmt.Sprintf("%d", slashAmt)),
-			"height":     []byte(fmt.Sprintf("%d", blockCtx.Height)),
-			"reason":     []byte(reason),
-		}),
-	}, nil
+	}
+
+	// Slash each delegation by the same basis-point fraction. This
+	// matches spec §9: "slash from (validator + delegator) stake
+	// proportionally." We collect dirty delegations, mutate them
+	// into write effects, and emit. Empty delegation list (e.g.
+	// validator with self-power only) is fine.
+	delegationEffects, err := m.slashDelegations(ctx, evidence.PubKey.Data, slashBps)
+	if err != nil {
+		return nil, fmt.Errorf("slash delegations: %w", err)
+	}
+	outEffects = append(outEffects, delegationEffects...)
+
+	// Move the slashed tokens from staking.pool to the Common
+	// Treasury. The aggregate of validator + delegator burns equals
+	// slashAmt by construction (basis-points × TotalDelegation).
+	if slashAmt > 0 {
+		outEffects = append(outEffects, effects.TransferEffect{
+			From:   ptypes.AccountName("staking.pool"),
+			To:     runtime.ModuleAccountCT,
+			Amount: ptypes.NewCoins(ptypes.NewCoin(stakingDenom, slashAmt)),
+		})
+	}
+
+	outEffects = append(outEffects, effects.NewEventEffect("staking.validator_slashed", map[string][]byte{
+		"pub_key":    []byte(hex.EncodeToString(evidence.PubKey.Data)),
+		"prev_power": []byte(fmt.Sprintf("%d", prevPower)),
+		"new_power":  []byte(fmt.Sprintf("%d", newPower)),
+		"slash_amt":  []byte(fmt.Sprintf("%d", slashAmt)),
+		"slash_bps":  []byte(fmt.Sprintf("%d", slashBps)),
+		"height":     []byte(fmt.Sprintf("%d", blockCtx.Height)),
+		"reason":     []byte(reason),
+	}))
+
+	return outEffects, nil
+}
+
+// slashDelegations walks every delegation to `validatorPubKey` and
+// emits a WriteEffect that decrements each one by slashBps / 10000.
+// Returns an empty slice when iteration isn't supported (in-memory
+// test stores). The caller is responsible for emitting the
+// corresponding pool→CT transfer for the aggregate slashed amount —
+// individual per-delegation rounding is absorbed into the
+// validator's row to keep `sum(delegations) == TotalDelegation` an
+// invariant.
+//
+// Phase 2.6.
+func (m *BAPIStakingModule) slashDelegations(ctx context.Context, validatorPubKey []byte, slashBps uint64) ([]effects.Effect, error) {
+	hexKey := hex.EncodeToString(validatorPubKey)
+	var dirty []*store.BAPIDelegation
+	err := m.validatorStore.IterateDelegations(func(d *store.BAPIDelegation) bool {
+		if d == nil || d.ValidatorPubKey != hexKey {
+			return false
+		}
+		newAmount := d.Amount - (d.Amount * slashBps / 10000)
+		if newAmount == d.Amount {
+			return false
+		}
+		dirty = append(dirty, &store.BAPIDelegation{
+			Delegator:       d.Delegator,
+			ValidatorPubKey: d.ValidatorPubKey,
+			Amount:          newAmount,
+		})
+		return false
+	})
+	if err != nil {
+		return nil, nil
+	}
+	out := make([]effects.Effect, 0, len(dirty))
+	for _, d := range dirty {
+		out = append(out, &effects.WriteEffect[*store.BAPIDelegation]{
+			Store:    "delegations",
+			StoreKey: []byte(d.Delegator + "/" + d.ValidatorPubKey),
+			Value:    d,
+		})
+	}
+	return out, nil
 }
 
 // EndBlock is called at the end of each block.

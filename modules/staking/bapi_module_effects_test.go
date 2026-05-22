@@ -209,6 +209,7 @@ func TestHandleUndelegate_RepeatedUndelegateIsRejected(t *testing.T) {
 type stakingHarness struct {
 	mod       *BAPIStakingModule
 	store     *store.BAPIValidatorStore
+	bs        *store.BAPIBalanceStore
 	exec      *effects.BAPIExecutor
 	blockCtx  *runtime.BAPIBlockContext
 	txCtx     *runtime.BAPITxContext
@@ -233,6 +234,7 @@ func newStakingHarness(t *testing.T) *stakingHarness {
 	return &stakingHarness{
 		mod:      mod,
 		store:    validatorStore,
+		bs:       balanceStore,
 		exec:     exec,
 		blockCtx: blockCtx,
 		txCtx: &runtime.BAPITxContext{
@@ -272,6 +274,13 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
 	require.NoError(t, err)
+
+	// Phase 2.6: slash is computed off TotalDelegation. Give the
+	// validator a backing delegation equal to initialPower so the
+	// slash math has something to bite. Seed staking.pool to back
+	// the eventual slash transfer to module.ct.
+	require.NoError(t, h.store.Delegate(ctx, "alice", pubKey, initialPower))
+	require.NoError(t, h.bs.Set(ctx, "staking.pool", "stake", initialPower))
 
 	h.blockCtx.Height++
 	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
@@ -369,7 +378,8 @@ func TestProcessEvidence_LightClientAttackSlashes(t *testing.T) {
 			Type: types.KeyTypeEd25519,
 			Data: pubKey,
 		},
-		Power: initialPower,
+		Power:           initialPower,
+		TotalDelegation: initialPower,
 	}))
 
 	ev := types.Evidence{
@@ -435,9 +445,12 @@ func TestProcessEvidence_SlashFractionFromParams(t *testing.T) {
 	const initialPower uint64 = 10000
 
 	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
+	// Phase 2.6 slashes off TotalDelegation, so seed it equal to
+	// Power for the test to exercise the proportional slash math.
 	require.NoError(t, h.store.SetValidator(ctx, &store.BAPIValidator{
-		PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
-		Power:  initialPower,
+		PubKey:          types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
+		Power:           initialPower,
+		TotalDelegation: initialPower,
 	}))
 
 	// Light-client attack with a custom 50% override (5000 bps).
@@ -475,9 +488,12 @@ func TestProcessEvidence_SlashFractionDefaultWhenZero(t *testing.T) {
 	const initialPower uint64 = 10000
 
 	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
+	// Phase 2.6 slashes off TotalDelegation, so seed it equal to
+	// Power for the test to exercise the proportional slash math.
 	require.NoError(t, h.store.SetValidator(ctx, &store.BAPIValidator{
-		PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
-		Power:  initialPower,
+		PubKey:          types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
+		Power:           initialPower,
+		TotalDelegation: initialPower,
 	}))
 
 	// Params present but the per-type field is zero — should pick up

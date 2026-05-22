@@ -57,9 +57,16 @@ func TestExecuteBlock_EvidenceFlowsToStakingAndEndBlockEmitsSlashedPower(t *test
 			Type: types.KeyTypeEd25519,
 			Data: pubKey,
 		},
-		Power: initialPower,
+		Power:           initialPower,
+		TotalDelegation: initialPower,
 	}); err != nil {
 		t.Fatalf("seed validator: %v", err)
+	}
+	// Phase 2.6: slash transfers slashAmt from staking.pool to
+	// module.ct. Seed staking.pool with enough to cover the slash so
+	// the transfer effect doesn't underflow.
+	if err := provider.GetBalanceStore().Set(ctx, "staking.pool", "stake", initialPower); err != nil {
+		t.Fatalf("seed staking.pool: %v", err)
 	}
 	if _, _, err := ss.Commit(); err != nil {
 		t.Fatalf("seed commit: %v", err)
@@ -161,9 +168,14 @@ func TestExecuteBlock_EvidenceUsesConsensusParamsSlashFraction(t *testing.T) {
 			Type: types.KeyTypeEd25519,
 			Data: pubKey,
 		},
-		Power: initialPower,
+		Power:           initialPower,
+		TotalDelegation: initialPower,
 	}); err != nil {
 		t.Fatalf("seed validator: %v", err)
+	}
+	// Phase 2.6: stake the slash transfer.
+	if err := provider.GetBalanceStore().Set(ctx, "staking.pool", "stake", initialPower); err != nil {
+		t.Fatalf("seed staking.pool: %v", err)
 	}
 	params := store.DefaultConsensusParams()
 	params.SlashFractionDoubleSignBps = overrideBps
