@@ -1,15 +1,3 @@
-// Package fees implements the fee schedule registry and the
-// fee-routing AnteHandler per the tokenomics spec §2 / §3.
-//
-// The module owns the chain's current and pending fee schedules.
-// The AnteHandler (wired in BAPIApplication) reads the schedule on
-// every tx, validates the tx's submitted Fee against it, deducts
-// the total from the payer, and routes the proceeds:
-//
-//   - per-op + per-byte components → CT (module.ct)
-//   - priority component           → priority_pool_pending (module.pp)
-//
-// PLAN §7 Phase 1 / decisions D1, D3, D8, D14.
 package fees
 
 import (

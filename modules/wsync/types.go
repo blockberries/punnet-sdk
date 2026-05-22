@@ -1,33 +1,3 @@
-// Package wsync implements weak-subjectivity checkpoints per
-// tokenomics spec §7 / §11 and PLAN §7 Phase 5.
-//
-// A weak-subjectivity (WS) checkpoint pins the chain state at a
-// specific height with a tuple
-//
-//	(height, app_hash, validator_set_hash)
-//
-// signed by ≥2/3 of the active set's stake at that height. A
-// fresh client joining the network is given any checkpoint
-// no older than the unbonding period (21 days per spec §7);
-// they verify the signatures against the active set known to
-// them (e.g. from a trusted snapshot or peer attestation), and
-// once verified they sync forward from that point with normal
-// fork-choice rules.
-//
-// This module maintains the rolling-window store of checkpoints
-// and exposes the verification entrypoint used by light clients +
-// state-syncing nodes. Per-validator attestation gossip is a
-// cross-repo concern (looseberry-adjacent stream + raspberry
-// wiring; PLAN §7 Phase 5.3) and is not in this package. The
-// module accepts attestations via AddAttestation, which the
-// network layer calls when a validator's signature arrives.
-//
-// Pruning: at every EndBlock, checkpoints older than
-// UnbondingPeriodBlocks are removed from the store. The
-// rolling-window invariant gives clients a bounded staleness
-// horizon: a peer cannot trick a fresh client into accepting a
-// checkpoint signed by a validator set that has since been fully
-// unbonded.
 package wsync
 
 // ModuleName is the module's unique name.

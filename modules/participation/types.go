@@ -1,19 +1,3 @@
-// Package participation implements the per-validator participation
-// counters per tokenomics spec §3.4 / §7. The module observes the
-// bapi.MempoolObserver events and tracks:
-//
-//   - leader_blocks[v]: incremented when validator v proposes a
-//     committed block that contains ≥1 certified batch (spec §3.4 /
-//     PLAN decision D11). Empty blocks earn no leader credit.
-//   - batches_certified[v]: incremented when a batch produced by
-//     any of v's W workers reaches cert-quorum. Credit goes to the
-//     validator (not the worker — D16).
-//
-// At epoch close (Height % EpochBlocks == 0), the distribution
-// module reads the frozen counters to compute share(v); the
-// counters then reset for the next epoch.
-//
-// PLAN §7 Phase 3.3 / 3.4.
 package participation
 
 // ModuleName is the module's unique name used for genesis blob

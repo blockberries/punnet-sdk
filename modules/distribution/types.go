@@ -1,34 +1,3 @@
-// Package distribution implements the validator/delegator reward
-// split per the cosmos-sdk-style F1 algorithm described in
-// tokenomics spec §4.4.
-//
-// Each validator maintains a cumulative reward-per-share index R_v
-// (18-decimal internal precision). At every epoch close the
-// Emission Pool (mint) + Priority Pool (fees) are partitioned by
-// participation share — share(v) = α·leader_share + (1-α)·batch_share
-// per spec §3.4 — and each validator's R_v advances by
-//
-//	R_v += share(v) · (EmissionPool + PriorityPool) · (1 - c) / total_stake_on_v
-//
-// Delegators pull their accumulated rewards via
-// MsgWithdrawDelegatorReward: at claim time they receive
-// delegator_stake · (R_v_now - R_v_when_joined). The validator's
-// commission share (c · share(v) · pools) accrues into a separate
-// outstanding-commission accumulator that the validator account
-// withdraws via MsgWithdrawValidatorCommission.
-//
-// **Scope note (Phase 3.5):** this v1 module covers the F1 base
-// case correctly. Slash-period interaction (spec §4.4 — "the
-// subtlest part of F1; getting it wrong silently over/underpays
-// delegators after the first slash") is NOT yet implemented; a
-// delegator who delegated before a slash will be credited against
-// post-slash stake for pre-slash rewards (underpay) until Phase
-// 3.6 expansion adds per-period snapshot + slash-factor walking
-// per the cosmos-sdk x/distribution algebra. The
-// outstanding-state machinery (period counter, snapshot map) is
-// scaffolded so the expansion is additive, not a rewrite.
-//
-// PLAN §7 Phase 3.5 / 3.6.
 package distribution
 
 // ModuleName is the module's unique name.

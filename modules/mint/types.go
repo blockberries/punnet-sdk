@@ -1,22 +1,3 @@
-// Package mint implements the per-block VRP drain that funds
-// validator rewards per the tokenomics spec §4.1. The module
-// computes
-//
-//	B_t = ρ · CS_t · taper(VRP_t)
-//	taper(V) = min(1, V / V_threshold), V_threshold = 5% · S
-//
-// each block, debits VRP by B_t and credits the chain-wide Emission
-// Pool (module.emission). The Emission Pool drains to per-validator
-// reward accumulators at every epoch close (§4.4 / Phase 3.5
-// distribution).
-//
-// "Mint" is a misnomer inherited from cosmos-sdk: this module does
-// NOT mint new supply (the chain is fixed-supply per spec §0.1). It
-// moves tokens from the pre-allocated VRP pool into the Emission
-// Pool on a rule-bound schedule. Total supply is unchanged at all
-// times.
-//
-// PLAN §7 Phase 3.1 / 3.2.
 package mint
 
 // ModuleName is the module's unique name used for genesis blob
