@@ -2,10 +2,7 @@ package effects
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
-
-	"github.com/blockberries/punnet-sdk/types"
 )
 
 // TestSliceAliasing_WriteEffectFullKey verifies fullKey creates defensive copy
@@ -183,81 +180,3 @@ func TestNilCheck_ConflictError(t *testing.T) {
 	t.Log("✓ Conflict.Error() handles nil safely")
 }
 
-// TestNilCheck_GraphBuildDependencies tests nil check in buildDependencies
-func TestNilCheck_GraphBuildDependencies(t *testing.T) {
-	var g *Graph = nil
-
-	err := g.buildDependencies()
-	if err == nil || err.Error() != "graph is nil" {
-		t.Errorf("Graph.buildDependencies() should return error for nil receiver, got: %v", err)
-	}
-
-	t.Log("✓ Graph.buildDependencies() handles nil receiver")
-}
-
-// TestNilCheck_SchedulerFindReadyNodes tests nil checks in findReadyNodes
-func TestNilCheck_SchedulerFindReadyNodes(t *testing.T) {
-	var s *Scheduler = nil
-
-	// Should return nil, not panic
-	ready := s.findReadyNodes(make(map[int]bool))
-	if ready != nil {
-		t.Errorf("Scheduler.findReadyNodes() should return nil for nil receiver, got: %v", ready)
-	}
-
-	// Test with nil graph
-	s = &Scheduler{graph: nil}
-	ready = s.findReadyNodes(make(map[int]bool))
-	if ready != nil {
-		t.Errorf("Scheduler.findReadyNodes() should return nil for nil graph, got: %v", ready)
-	}
-
-	t.Log("✓ Scheduler.findReadyNodes() handles nil safely")
-}
-
-// TestParallelExecution_NoRaceConditions verifies parallel execution is thread-safe
-func TestParallelExecution_NoRaceConditions(t *testing.T) {
-	store := NewMockStore()
-	balanceStore := NewMockBalanceStore()
-	executor, err := NewExecutor(store, balanceStore)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
-
-	// Initialize some balances
-	balanceStore.SetBalance("alice", "uatom", 1000)
-	balanceStore.SetBalance("bob", "uatom", 1000)
-	balanceStore.SetBalance("charlie", "uatom", 1000)
-
-	// Create many independent transfer effects
-	effects := make([]Effect, 100)
-	for i := 0; i < 100; i++ {
-		from := types.AccountName(fmt.Sprintf("account%d", i%10))
-		to := types.AccountName(fmt.Sprintf("account%d", (i+1)%10))
-
-		// Initialize accounts if needed
-		balanceStore.SetBalance(from, "uatom", 100)
-		balanceStore.SetBalance(to, "uatom", 100)
-
-		effects[i] = TransferEffect{
-			From:   from,
-			To:     to,
-			Amount: types.Coins{{Denom: "uatom", Amount: 1}},
-		}
-	}
-
-	// Create batches for parallel execution
-	batches := [][]Effect{effects[:50], effects[50:]}
-
-	// Execute in parallel - race detector will catch issues
-	result, err := executor.ExecuteParallel(batches)
-	if err != nil {
-		t.Fatalf("Parallel execution failed: %v", err)
-	}
-
-	if result == nil {
-		t.Fatalf("ExecuteParallel returned nil result")
-	}
-
-	t.Log("✓ Parallel execution completes without race conditions")
-}

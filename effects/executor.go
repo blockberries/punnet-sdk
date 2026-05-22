@@ -73,10 +73,10 @@ func (r *ExecutionResult) GetEvents() []Event {
 // Executor executes effects against a store
 // Executor applies effects to state stores.
 //
-// Thread Safety: Executor is safe for concurrent use. The Execute() and ExecuteParallel()
-// methods can be called concurrently. However, the Store and BalanceStore implementations
-// provided to NewExecutor MUST be thread-safe, as they will be accessed concurrently
-// during parallel effect execution.
+// Thread Safety: Executor is safe for concurrent use by independent callers
+// (each call to Execute owns its own ExecutionResult). The Store and
+// BalanceStore implementations passed to NewExecutor must themselves be
+// thread-safe if the runtime may invoke Execute from multiple goroutines.
 type Executor struct {
 	// store is the underlying state store (must be thread-safe)
 	store Store
@@ -263,51 +263,3 @@ func (e *Executor) executeEvent(effect Effect, result *ExecutionResult) error {
 	return nil
 }
 
-// ExecuteParallel executes independent effects in parallel
-// Effects in each batch must be independent (no conflicts)
-func (e *Executor) ExecuteParallel(batches [][]Effect) (*ExecutionResult, error) {
-	if e == nil {
-		return nil, fmt.Errorf("executor is nil")
-	}
-	if batches == nil {
-		return nil, fmt.Errorf("batches cannot be nil")
-	}
-
-	result := NewExecutionResult()
-
-	// Execute each batch sequentially
-	for batchIdx, batch := range batches {
-		if len(batch) == 0 {
-			continue
-		}
-
-		// Execute effects in this batch in parallel
-		var wg sync.WaitGroup
-		errChan := make(chan error, len(batch))
-
-		for effectIdx, effect := range batch {
-			if effect == nil {
-				return nil, fmt.Errorf("batch %d, effect %d is nil", batchIdx, effectIdx)
-			}
-
-			wg.Add(1)
-			go func(eff Effect, idx int) {
-				defer wg.Done()
-				if err := e.executeEffect(eff, result); err != nil {
-					errChan <- fmt.Errorf("batch %d, effect %d: %w", batchIdx, idx, err)
-				}
-			}(effect, effectIdx)
-		}
-
-		// Wait for all effects in this batch
-		wg.Wait()
-		close(errChan)
-
-		// Check for errors
-		for err := range errChan {
-			return nil, err
-		}
-	}
-
-	return result, nil
-}
