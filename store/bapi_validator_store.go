@@ -544,3 +544,29 @@ func (s *BAPIValidatorStore) IterateDelegations(fn func(d *BAPIDelegation) bool)
 		return fn(d)
 	})
 }
+
+// GetValidatorByAddress looks up the validator whose Address()
+// matches addr by linear scan over IterateValidators. Returns nil
+// if no validator is found.
+//
+// The mempool-observer events identify validators by 20-byte
+// address (bapi.ValidatorAddress); the validator store keys
+// records by 32-byte hex pubkey. Distribution and any other
+// address-driven consumer needs this cross-walk. The N-scan is
+// fine at v1 scale (active set ≤ 300).
+//
+// PLAN §7 Phase 3.5.
+func (s *BAPIValidatorStore) GetValidatorByAddress(addr types.ValidatorAddress) (*BAPIValidator, error) {
+	var found *BAPIValidator
+	err := s.IterateValidators(func(v *BAPIValidator) bool {
+		if v.Address() == addr {
+			found = v
+			return true
+		}
+		return false
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
