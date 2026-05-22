@@ -105,10 +105,18 @@ func (s *BAPIParamsStore) UpdateMaxEvidenceAge(ctx context.Context, maxEvidenceA
 }
 
 // DefaultConsensusParams returns default consensus parameters.
+//
+// Slash fractions are expressed in basis points (10000 = 100%):
+//   - double-sign: 500 bps (5%) — matches Cosmos SDK conventions.
+//   - light-client attack: 1000 bps (10%) — strictly higher than
+//     double-sign since light-client attacks affect external clients
+//     who have no way to detect them locally.
 func DefaultConsensusParams() *types.ConsensusParams {
 	return &types.ConsensusParams{
-		MaxBlockBytes:  22020096,                               // 21 MB
-		MaxTxBytes:     1048576,                                // 1 MB
-		MaxEvidenceAge: types.Duration{Nanos: 172800000000000}, // 48 hours in nanoseconds
+		MaxBlockBytes:               22020096,                               // 21 MB
+		MaxTxBytes:                  1048576,                                // 1 MB
+		MaxEvidenceAge:              types.Duration{Nanos: 172800000000000}, // 48 hours in nanoseconds
+		SlashFractionDoubleSignBps:  500,                                    // 5%
+		SlashFractionLightClientBps: 1000,                                   // 10%
 	}
 }

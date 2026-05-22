@@ -47,6 +47,18 @@ type BAPIBlockProcessor interface {
 	EndBlock(ctx context.Context, blockCtx *BAPIBlockContext) ([]effects.Effect, []types.ValidatorUpdate, error)
 }
 
+// BAPIEvidenceHandler is implemented by modules that wish to react to
+// Byzantine evidence delivered in a FinalizedBlock — typically the staking
+// module, which slashes the offending validator. The handler returns
+// effects (e.g. a WriteEffect updating the validator's power) that the
+// application executes between BeginBlock and tx execution so the resulting
+// state changes are visible to txs and to EndBlock's ValidatorUpdate
+// emission. See PLAN C2.
+type BAPIEvidenceHandler interface {
+	BAPIModule
+	ProcessEvidence(ctx context.Context, blockCtx *BAPIBlockContext, evidence types.Evidence) ([]effects.Effect, error)
+}
+
 // BAPIGenesisInitializer is implemented by modules that need genesis initialization.
 type BAPIGenesisInitializer interface {
 	BAPIModule
@@ -57,6 +69,20 @@ type BAPIGenesisInitializer interface {
 type BAPIGenesisExporter interface {
 	BAPIModule
 	ExportGenesis(ctx context.Context) ([]byte, error)
+}
+
+// BAPIParamsUpdater is implemented by modules that can change consensus
+// params during a block — e.g. a governance module enacting a passed
+// proposal. The runtime walks all such modules at EndBlock (in
+// name-sorted order, after the regular EndBlock hooks). At most one
+// module per block may return a non-nil result; if a second module
+// also returns non-nil, the runtime rejects the block as conflicting.
+// The returned `*types.ConsensusParams` REPLACES the chain's current
+// params wholesale — modules that want to change one field must read
+// the current params first and copy through unmodified fields.
+type BAPIParamsUpdater interface {
+	BAPIModule
+	ParamsUpdate(ctx context.Context, blockCtx *BAPIBlockContext) (*types.ConsensusParams, error)
 }
 
 // BAPIRouter routes messages and queries to handlers.

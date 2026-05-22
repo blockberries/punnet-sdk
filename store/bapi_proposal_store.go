@@ -220,6 +220,18 @@ func (s *BAPIProposalStore) HasProposal(ctx context.Context, id uint64) (bool, e
 	return s.proposals.Has(ctx, proposalKey(id))
 }
 
+// IterateProposals walks every proposal in the store, invoking fn for
+// each. Return true from fn to stop iteration.
+//
+// Returns ErrIterationUnsupported if the underlying StateStore is not
+// iterable. Iteration order is the proposal store's underlying tree
+// order (ascending byte order over zero-padded proposal IDs).
+func (s *BAPIProposalStore) IterateProposals(fn func(p *BAPIProposal) bool) error {
+	return s.proposals.IterateRelative(func(_ string, p *BAPIProposal) bool {
+		return fn(p)
+	})
+}
+
 // GetVote retrieves a vote.
 func (s *BAPIProposalStore) GetVote(ctx context.Context, proposalID uint64, voter string) (*BAPIVote, error) {
 	if proposalID == 0 {

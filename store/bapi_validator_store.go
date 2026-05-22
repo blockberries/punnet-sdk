@@ -289,3 +289,20 @@ func (s *BAPIValidatorStore) GetValidatorAtHeight(ctx context.Context, pubKey []
 	}
 	return s.validators.GetAtHeight(ctx, validatorKey(pubKey), height)
 }
+
+// IterateValidators walks every validator currently in the store,
+// invoking fn for each. Returns true from fn to stop iteration.
+//
+// Returns ErrIterationUnsupported if the underlying StateStore is not
+// iterable (test in-memory stores). Used by genesis export and any
+// query handler that needs a full validator listing without reaching
+// into the typed-store internals.
+//
+// Iteration order is the underlying tree's ascending byte order over
+// hex-encoded pubkeys, which is deterministic and suitable for
+// consensus-critical exports.
+func (s *BAPIValidatorStore) IterateValidators(fn func(v *BAPIValidator) bool) error {
+	return s.validators.IterateRelative(func(_ string, v *BAPIValidator) bool {
+		return fn(v)
+	})
+}

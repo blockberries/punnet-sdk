@@ -211,8 +211,15 @@ func (app *Application) ExportGenesis(ctx context.Context) (*GenesisState, error
 		ChainID:       app.chainID,
 		GenesisTime:   timestamp,
 		InitialHeight: height,
-		Validators:    []types.ValidatorUpdate{}, // TODO: Export current validator set
-		AppState:      appState,
+		// The legacy Application path does not maintain a top-level
+		// validator set view — validators live inside the staking module
+		// state, which is exported via AppState["staking"]. The BAPI
+		// runtime is the production path; raspberry uses the staking
+		// module's ExportGenesis directly. If a consumer needs a
+		// `[]ValidatorUpdate` here, decode AppState["staking"].validators
+		// and convert.
+		Validators: []types.ValidatorUpdate{},
+		AppState:   appState,
 	}
 
 	return genesis, nil
