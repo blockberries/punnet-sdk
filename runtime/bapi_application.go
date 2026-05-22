@@ -891,18 +891,29 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 		}
 	}
 
-	// Phase 2.4: seed bootstrap-validator vesting state on any module
-	// that opts in (the staking module). The runtime computes the
-	// per-validator share and vest-start once from TokenomicsGenesis
-	// so every module that needs the info sees identical inputs.
-	if a.tokenomicsGenesis != nil && len(a.tokenomicsGenesis.BootstrapValidators) > 0 {
-		_, _, _, _, blTotal := a.tokenomicsGenesis.InitialAllocations()
-		perVal := blTotal / uint64(len(a.tokenomicsGenesis.BootstrapValidators))
-		vestStart := uint64(genesis.InitialHeight) + BootstrapLockBlocks
+	// Phase 2.4 / 2.8: deliver tokenomics info (TotalSupply + bootstrap
+	// validators) to any module that opts in. The runtime computes the
+	// per-validator share and vest-start once from TokenomicsGenesis so
+	// every consumer sees identical inputs. Fires even when there are
+	// no bootstrap validators — modules that just need TotalSupply
+	// (e.g. staking's bond computation in Phase 2.8) still get called.
+	if a.tokenomicsGenesis != nil {
+		var perVal, vestStart uint64
+		if n := len(a.tokenomicsGenesis.BootstrapValidators); n > 0 {
+			_, _, _, _, blTotal := a.tokenomicsGenesis.InitialAllocations()
+			perVal = blTotal / uint64(n)
+			vestStart = uint64(genesis.InitialHeight) + BootstrapLockBlocks
+		}
+		params := TokenomicsParams{
+			TotalSupply:         a.tokenomicsGenesis.TotalSupply,
+			BootstrapValidators: a.tokenomicsGenesis.BootstrapValidators,
+			PerValidatorShare:   perVal,
+			VestStartHeight:     vestStart,
+		}
 		for _, mod := range sortedModules {
-			if seeder, ok := mod.(BAPIBootstrapInitializer); ok {
-				if err := seeder.SeedBootstrapValidators(ctx, a.tokenomicsGenesis.BootstrapValidators, perVal, vestStart); err != nil {
-					return fmt.Errorf("seed bootstrap validators for %s: %w", mod.Name(), err)
+			if consumer, ok := mod.(BAPITokenomicsConsumer); ok {
+				if err := consumer.ConsumeTokenomics(ctx, params); err != nil {
+					return fmt.Errorf("consume tokenomics for %s: %w", mod.Name(), err)
 				}
 			}
 		}

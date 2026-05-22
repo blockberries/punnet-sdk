@@ -71,21 +71,29 @@ type BAPIGenesisExporter interface {
 	ExportGenesis(ctx context.Context) ([]byte, error)
 }
 
-// BAPIBootstrapInitializer is the optional hook for modules that need
-// to seed state from `TokenomicsGenesis.BootstrapValidators`. The
-// runtime invokes it once per module after the regular InitGenesis
-// loop, passing the per-validator BL share and the chain-wide
-// vest-start height (genesis_height + BootstrapLockBlocks). Used by
-// the staking module to create per-validator BootstrapInfo records
-// and self-delegations under D17 / D22 (PLAN §7 Phase 2.4).
+// BAPITokenomicsConsumer is the optional hook for modules that need
+// chain-wide tokenomics parameters at genesis time
+// (TotalSupply, bootstrap validators + their per-validator BL share,
+// vest-start height). The runtime invokes it once per module after
+// the regular InitGenesis loop and after protocol-account seeding,
+// when TokenomicsGenesis is present. The hook fires even when
+// BootstrapValidators is empty — modules that just need TotalSupply
+// (e.g. the staking module's validator-register bond) still get
+// called.
 //
-// Modules without bootstrap state simply don't implement this; the
-// runtime skips them. Chains without bootstrap validators (empty
-// TokenomicsGenesis.BootstrapValidators) also skip the call entirely
-// regardless of which modules implement the interface.
-type BAPIBootstrapInitializer interface {
+// PerValidatorShare and VestStartHeight are zero when there are no
+// bootstrap validators.
+type BAPITokenomicsConsumer interface {
 	BAPIModule
-	SeedBootstrapValidators(ctx context.Context, validators []BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error
+	ConsumeTokenomics(ctx context.Context, p TokenomicsParams) error
+}
+
+// TokenomicsParams is the payload to BAPITokenomicsConsumer.
+type TokenomicsParams struct {
+	TotalSupply         uint64
+	BootstrapValidators []BootstrapValidator
+	PerValidatorShare   uint64
+	VestStartHeight     uint64
 }
 
 // BAPIParamsUpdater is implemented by modules that can change consensus

@@ -39,6 +39,12 @@ type BAPIStakingModule struct {
 	// Used by EndBlock at epoch-close to take the top-N by power.
 	// PLAN §7 Phase 2.3.
 	activeSetSize uint32
+
+	// totalSupply is the chain-wide TotalSupply captured at genesis
+	// time from TokenomicsGenesis via ConsumeTokenomics. Used by
+	// Phase 2.8's validator-register bond computation. Zero when
+	// the chain does not enforce a fixed supply (test-only setups).
+	totalSupply uint64
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -162,6 +168,19 @@ const UnbondingPeriodBlocks uint64 = 21 * 24 * 60 * 60
 // Phase 2.2 / D17 (bootstrap validators are pinned at exactly this
 // value).
 const CommissionFloorBps uint32 = 500
+
+// ValidatorBondFractionBps is the validator-register bond rate per
+// PLAN §7 Phase 2.8 / D23: 0.01% = 1 bp of TotalSupply, charged at
+// MsgCreateValidator time and held in a per-validator escrow. The
+// bond is refunded on clean deregister (future MsgDeregister handler)
+// and forfeited to the Common Treasury on jail or tombstone.
+const ValidatorBondFractionBps uint64 = 1
+
+// BondEscrowAccount holds bonds posted by registered validators
+// until they deregister or are slashed. A dedicated module account
+// rather than staking.pool so the supply audit can separate
+// at-stake collateral from voting stake.
+const BondEscrowAccount = "module.bonds"
 
 // SlashFractionBasisPoints is the legacy compiled-in fraction used when
 // the per-type knobs above weren't around yet. Retained as an alias for
@@ -294,6 +313,24 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 			To:     runtime.ModuleAccountCT,
 			Amount: ptypes.NewCoins(ptypes.NewCoin(stakingDenom, slashAmt)),
 		})
+	}
+
+	// Phase 2.8: forfeit the validator's register-bond to CT on
+	// jail or tombstone (D23). A clean deregister path will refund
+	// instead — not implemented in this phase, so all slash paths
+	// forfeit.
+	if validator.Bond > 0 {
+		outEffects = append(outEffects, effects.TransferEffect{
+			From:   ptypes.AccountName(BondEscrowAccount),
+			To:     runtime.ModuleAccountCT,
+			Amount: ptypes.NewCoins(ptypes.NewCoin(stakingDenom, validator.Bond)),
+		})
+		// Zero out the validator's Bond field so re-slashes don't
+		// double-forfeit. Update the post-slash record in-place
+		// before it is written by the WriteEffect above; we already
+		// captured a pointer to updatedValidator, so adjusting it
+		// here just changes the value the WriteEffect writes.
+		updatedValidator.Bond = 0
 	}
 
 	tombstoneAttr := []byte("false")
@@ -641,25 +678,34 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 	return nil
 }
 
-// SeedBootstrapValidators implements runtime.BAPIBootstrapInitializer.
+// ConsumeTokenomics implements runtime.BAPITokenomicsConsumer.
 //
-// Creates per-bootstrap-validator state at genesis: the validator
-// record (Power = perValidatorShare, Commission pinned to
-// BootstrapCommission = 500), the self-delegation, the active-set
-// entry, and the BootstrapInfo vesting record. Called by the runtime
-// after the regular InitGenesis loop when
-// TokenomicsGenesis.BootstrapValidators is non-empty. PLAN §7 Phase
-// 2.4 / D17, D22.
+// Captures TotalSupply for downstream computations (Phase 2.8
+// validator-register bond) and seeds per-bootstrap-validator state
+// from the supplied list. Called by the runtime after the regular
+// InitGenesis loop when TokenomicsGenesis is present, including the
+// no-bootstrap-validators case where only TotalSupply matters.
 //
-// The validator's BL share is debited from module.bl and credited to
-// staking.pool so the self-delegation is backed by real tokens. The
-// BootstrapInfo record then governs WHEN the validator may
-// undelegate this self-stake (Phase 2.5's vesting math) — the
-// tokens themselves are not moved again during the vest window.
-func (m *BAPIStakingModule) SeedBootstrapValidators(ctx context.Context, validators []runtime.BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error {
+// For each bootstrap validator: a validator record with
+// Power = perValidatorShare and Commission pinned to
+// runtime.BootstrapCommission, a self-delegation, an active-set
+// entry, and a BootstrapInfo vesting record. The BL share is debited
+// from module.bl and credited to staking.pool so the self-delegation
+// is backed by real tokens; vesting (Phase 2.5) then governs when
+// the validator may undelegate.
+func (m *BAPIStakingModule) ConsumeTokenomics(ctx context.Context, p runtime.TokenomicsParams) error {
 	if m == nil || m.validatorStore == nil || m.balanceStore == nil {
 		return fmt.Errorf("module or store is nil")
 	}
+	m.totalSupply = p.TotalSupply
+	return m.SeedBootstrapValidators(ctx, p.BootstrapValidators, p.PerValidatorShare, p.VestStartHeight)
+}
+
+// SeedBootstrapValidators is the public seeder, kept for tests and
+// for any future caller that wants to populate bootstrap state
+// directly without going through the runtime hook. Phase 2.4 / D17,
+// D22.
+func (m *BAPIStakingModule) SeedBootstrapValidators(ctx context.Context, validators []runtime.BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error {
 	for _, bv := range validators {
 		if !bv.Name.IsValid() {
 			return fmt.Errorf("invalid bootstrap validator name %q", bv.Name)
@@ -897,6 +943,12 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 		return nil, fmt.Errorf("validator with public key %x already exists", createMsg.PubKey)
 	}
 
+	// Phase 2.8: compute the validator-register bond
+	// (TotalSupply × 1 bp). When the chain doesn't carry a fixed
+	// supply (test-only setups), totalSupply is 0 and no bond is
+	// charged.
+	bond := m.totalSupply * ValidatorBondFractionBps / 10000
+
 	// Build the validator value. NOTE: do NOT call validatorStore.SetValidator
 	// here — that would bypass the effect system. The WriteEffect below is the
 	// only path that persists state.
@@ -910,26 +962,38 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 		Description:     "",
 		Commission:      uint32(createMsg.Commission),
 		TotalDelegation: 0,
+		Bond:            bond,
 	}
 
-	// Phase 2.3: no dirty-marking. The new validator becomes
-	// eligible for the next epoch's top-N recomputation; consensus
-	// learns about it at the next epoch close.
-
-	return []effects.Effect{
+	outEffects := []effects.Effect{
 		&effects.WriteEffect[*store.BAPIValidator]{
 			Store:    "validators",
 			StoreKey: []byte(hex.EncodeToString(createMsg.PubKey)),
 			Value:    validator,
 		},
-		effects.NewEventEffect("staking.validator_created", map[string][]byte{
-			"delegator":  []byte(createMsg.Delegator),
-			"pub_key":    []byte(hex.EncodeToString(createMsg.PubKey)),
-			"power":      []byte(fmt.Sprintf("%d", createMsg.InitialPower)),
-			"commission": []byte(fmt.Sprintf("%d", createMsg.Commission)),
-			"height":     []byte(fmt.Sprintf("%d", txCtx.Height)),
-		}),
-	}, nil
+	}
+
+	// Charge the bond: transfer from creator's account to the
+	// bond-escrow module account. Skipped when bond is zero (chains
+	// without a configured TotalSupply).
+	if bond > 0 {
+		outEffects = append(outEffects, effects.TransferEffect{
+			From:   createMsg.Delegator,
+			To:     ptypes.AccountName(BondEscrowAccount),
+			Amount: ptypes.NewCoins(ptypes.NewCoin(stakingDenom, bond)),
+		})
+	}
+
+	outEffects = append(outEffects, effects.NewEventEffect("staking.validator_created", map[string][]byte{
+		"delegator":  []byte(createMsg.Delegator),
+		"pub_key":    []byte(hex.EncodeToString(createMsg.PubKey)),
+		"power":      []byte(fmt.Sprintf("%d", createMsg.InitialPower)),
+		"commission": []byte(fmt.Sprintf("%d", createMsg.Commission)),
+		"height":     []byte(fmt.Sprintf("%d", txCtx.Height)),
+		"bond":       []byte(fmt.Sprintf("%d", bond)),
+	}))
+
+	return outEffects, nil
 }
 
 // handleDelegate handles MsgDelegate.

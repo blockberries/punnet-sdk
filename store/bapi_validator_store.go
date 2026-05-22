@@ -35,6 +35,12 @@ type BAPIValidator struct {
 	// re-enter the active set even if they un-jail.
 	// PLAN §7 Phase 2.7.
 	Tombstoned bool `cramberry:"7"`
+
+	// Bond is the validator-register bond posted at
+	// MsgCreateValidator time and held in module.bonds. Refunded
+	// on clean deregister; forfeited to module.ct on jail or
+	// tombstone. PLAN §7 Phase 2.8 / D23.
+	Bond uint64 `cramberry:"8"`
 }
 
 // Address returns the validator's address (first 20 bytes of pubkey hash).
