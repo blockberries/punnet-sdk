@@ -656,22 +656,23 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 		TxBytes:          tx,
 	}
 
-	// Collect effects from all messages
-	var allEffects []effects.Effect
-
-	// AnteHandler stage. PLAN §7 Phase 0.4: run any registered ante
-	// handlers (fee deduction, spam guards, ...) between authorization
-	// and message dispatch. The first handler returning an error
-	// aborts the tx; subsequent handlers don't run.
+	// AnteHandler stage. PLAN §7 Phase 0.4 / Phase 1.5: run any
+	// registered ante handlers (fee deduction, spam guards, ...)
+	// between authorization and message dispatch. The first handler
+	// returning an error aborts the tx; subsequent handlers don't
+	// run.
 	//
-	// Today, AnteHandler effects are folded into the same atomic batch
-	// as the message-handler effects below — a handler failure rolls
-	// back the AnteHandler too. Phase 1.5 will split the commit so
-	// fees persist when the message handler aborts (spec §3's
-	// "failed-execution txs still pay").
+	// Ante effects commit *before* message handlers execute, so a
+	// failing handler does NOT roll back the fee deduction — that's
+	// spec §3's "failed-execution txs still pay" invariant. The
+	// AnteHandler chain itself is still all-or-nothing: if any
+	// handler in the chain errors, none of the chain's effects are
+	// applied. Only after the whole chain succeeds do its effects
+	// land in the store.
 	a.mu.RLock()
 	anteChain := a.anteHandlers
 	a.mu.RUnlock()
+	var anteEffectsTotal []effects.Effect
 	for _, ante := range anteChain {
 		anteEffects, err := ante(ctx, txCtx, ptx)
 		if err != nil {
@@ -681,35 +682,69 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 				Info:  fmt.Sprintf("ante: %v", err),
 			}, nil
 		}
-		allEffects = append(allEffects, anteEffects...)
+		anteEffectsTotal = append(anteEffectsTotal, anteEffects...)
 	}
 
-	for _, msg := range ptx.Messages {
-		// Get handler
-		handler := a.router.GetMsgHandler(msg.Type())
-		if handler == nil {
+	// Validate and commit ante effects up-front. If validation
+	// detects an internal conflict (e.g. the AnteHandler produced
+	// two transfers from the same payer that would over-spend), the
+	// tx is rejected with no state change — even the fee deduction
+	// doesn't apply, because the AnteHandler's contract is "all
+	// effects valid together or none".
+	if len(anteEffectsTotal) > 0 {
+		if err := a.effectExecutor.ValidateAll(anteEffectsTotal); err != nil {
 			return types.TxOutcome{
 				Index: index,
-				Code:  3,
-				Info:  fmt.Sprintf("unknown message type: %s", msg.Type()),
+				Code:  21,
+				Info:  fmt.Sprintf("ante validation: %v", err),
 			}, nil
 		}
-
-		// Execute handler - collect effects
-		msgEffects, err := handler(ctx, txCtx, msg)
-		if err != nil {
+		if _, err := a.effectExecutor.Execute(anteEffectsTotal); err != nil {
 			return types.TxOutcome{
 				Index: index,
-				Code:  4,
-				Info:  fmt.Sprintf("handler error: %v", err),
+				Code:  22,
+				Info:  fmt.Sprintf("ante execution: %v", err),
 			}, nil
 		}
-
-		allEffects = append(allEffects, msgEffects...)
 	}
 
-	// Validate all effects
-	if err := a.effectExecutor.ValidateAll(allEffects); err != nil {
+	// Message-handler stage. After ante has committed, dispatch each
+	// message; collect handler effects into a separate batch. A
+	// handler error (or unknown message type) at this point leaves
+	// the ante effects (fees) in place but undoes the message
+	// effects — which haven't applied yet, so "undoes" means "we
+	// just don't apply them".
+	//
+	// The nonce is incremented either way: an executed-then-failed
+	// tx still consumes its nonce slot, just like the fee, so the
+	// sender can't replay it. This mirrors EVM gas semantics.
+	var handlerEffects []effects.Effect
+	handlerErr := func() (errOut error, code uint32) {
+		for _, msg := range ptx.Messages {
+			handler := a.router.GetMsgHandler(msg.Type())
+			if handler == nil {
+				return fmt.Errorf("unknown message type: %s", msg.Type()), 3
+			}
+			msgEffects, err := handler(ctx, txCtx, msg)
+			if err != nil {
+				return fmt.Errorf("handler error: %v", err), 4
+			}
+			handlerEffects = append(handlerEffects, msgEffects...)
+		}
+		return nil, 0
+	}
+	if hErr, code := handlerErr(); hErr != nil {
+		// Fees stay committed; bump nonce so the failed tx can't replay.
+		if err := a.accountStore.IncrementNonce(ctx, ptx.Account); err != nil {
+			return types.TxOutcome{Index: index, Code: 7, Info: fmt.Sprintf("increment nonce: %v", err)}, nil
+		}
+		return types.TxOutcome{Index: index, Code: code, Info: hErr.Error()}, nil
+	}
+
+	if err := a.effectExecutor.ValidateAll(handlerEffects); err != nil {
+		if err2 := a.accountStore.IncrementNonce(ctx, ptx.Account); err2 != nil {
+			return types.TxOutcome{Index: index, Code: 7, Info: fmt.Sprintf("increment nonce: %v", err2)}, nil
+		}
 		return types.TxOutcome{
 			Index: index,
 			Code:  5,
@@ -717,9 +752,13 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 		}, nil
 	}
 
-	// Execute all effects atomically
-	execResult, err := a.effectExecutor.Execute(allEffects)
+	execResult, err := a.effectExecutor.Execute(handlerEffects)
 	if err != nil {
+		// Handler effects partially mutated state; the failure is
+		// surfaced but fees and nonce are still consumed.
+		if err2 := a.accountStore.IncrementNonce(ctx, ptx.Account); err2 != nil {
+			return types.TxOutcome{Index: index, Code: 7, Info: fmt.Sprintf("increment nonce: %v", err2)}, nil
+		}
 		return types.TxOutcome{
 			Index: index,
 			Code:  6,
@@ -727,7 +766,6 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 		}, nil
 	}
 
-	// Increment account nonce
 	if err := a.accountStore.IncrementNonce(ctx, ptx.Account); err != nil {
 		return types.TxOutcome{
 			Index: index,
