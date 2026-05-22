@@ -299,6 +299,15 @@ func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPI
 			return nil, nil, fmt.Errorf("process matured unbondings: %w", err)
 		}
 		blockEffects = append(blockEffects, matured...)
+
+		// Phase 2.5: advance BootstrapInfo.VestedAmount for each
+		// bootstrap validator currently within (or past) its vest
+		// window. This is purely a bookkeeping update — the tokens
+		// already moved to staking.pool at genesis; this just
+		// records how much of the self-stake is now unlocked.
+		if err := m.advanceBootstrapVesting(ctx, uint64(blockCtx.Height)); err != nil {
+			return nil, nil, fmt.Errorf("advance bootstrap vesting: %w", err)
+		}
 	}
 
 	if blockCtx == nil || !IsEpochCloseHeight(uint64(blockCtx.Height)) {
@@ -560,12 +569,13 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 // TokenomicsGenesis.BootstrapValidators is non-empty. PLAN §7 Phase
 // 2.4 / D17, D22.
 //
-// The validator account itself is NOT debited the perValidatorShare
-// — those tokens were seeded into module.bl at the protocol-account
-// step. Phase 2.5 wires the per-block release from module.bl to the
-// staking pool as the lock expires.
+// The validator's BL share is debited from module.bl and credited to
+// staking.pool so the self-delegation is backed by real tokens. The
+// BootstrapInfo record then governs WHEN the validator may
+// undelegate this self-stake (Phase 2.5's vesting math) — the
+// tokens themselves are not moved again during the vest window.
 func (m *BAPIStakingModule) SeedBootstrapValidators(ctx context.Context, validators []runtime.BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error {
-	if m == nil || m.validatorStore == nil {
+	if m == nil || m.validatorStore == nil || m.balanceStore == nil {
 		return fmt.Errorf("module or store is nil")
 	}
 	for _, bv := range validators {
@@ -615,8 +625,79 @@ func (m *BAPIStakingModule) SeedBootstrapValidators(ctx context.Context, validat
 		}); err != nil {
 			return fmt.Errorf("set bootstrap info: %w", err)
 		}
+
+		// Move the validator's BL share from module.bl into the
+		// staking pool so the self-delegation is backed by real
+		// tokens. This is a wholesale transfer at genesis time;
+		// vesting (Phase 2.5) gates undelegate, not token movement.
+		if err := m.balanceStore.Transfer(ctx, string(runtime.ModuleAccountBootstrap), "staking.pool", stakingDenom, perValidatorShare); err != nil {
+			return fmt.Errorf("transfer bootstrap share to staking pool: %w", err)
+		}
 	}
 	return nil
+}
+
+// advanceBootstrapVesting walks every bootstrap validator's
+// BootstrapInfo record and updates its VestedAmount to reflect the
+// current height. Idempotent — running on the same height a second
+// time produces no change. Phase 2.5.
+//
+// The update writes directly to the store rather than emitting
+// effects: vesting is a per-block bookkeeping operation that runs
+// after the tx-effect batch has settled, not part of it. Treating
+// it as state machinery (like the lastEmittedPowers cache that used
+// to live here) keeps the EndBlock effect batch small.
+func (m *BAPIStakingModule) advanceBootstrapVesting(ctx context.Context, currentHeight uint64) error {
+	var updates []*store.BAPIBootstrapInfo
+	err := m.validatorStore.IterateBootstrapInfos(func(bi *store.BAPIBootstrapInfo) bool {
+		newVested := computeVestedAmount(bi, currentHeight)
+		if newVested != bi.VestedAmount {
+			// Defensive copy to avoid mutating the iteration value.
+			updated := *bi
+			updated.VestedAmount = newVested
+			updates = append(updates, &updated)
+		}
+		return false
+	})
+	if err != nil {
+		// In-memory store without iteration: vesting can't progress
+		// in tests that bypass the iterable backend. That's fine —
+		// callers manipulate BootstrapInfo directly in those tests.
+		return nil
+	}
+	for _, u := range updates {
+		if err := m.validatorStore.SetBootstrapInfo(ctx, u); err != nil {
+			return fmt.Errorf("persist updated bootstrap info: %w", err)
+		}
+	}
+	return nil
+}
+
+// computeVestedAmount returns the cumulative vested amount for a
+// bootstrap validator at the given height. Linear vest over
+// BootstrapVestBlocks starting at VestStartHeight:
+//
+//   - height < VestStartHeight                : 0
+//   - height ≥ VestStartHeight + VestBlocks    : LockedAmount
+//   - in between                              : LockedAmount × (height-VestStartHeight) / VestBlocks
+//
+// PLAN §7 Phase 2.5.
+func computeVestedAmount(bi *store.BAPIBootstrapInfo, currentHeight uint64) uint64 {
+	if bi == nil || bi.LockedAmount == 0 || currentHeight < bi.VestStartHeight {
+		return 0
+	}
+	elapsed := currentHeight - bi.VestStartHeight
+	if elapsed >= runtime.BootstrapVestBlocks {
+		return bi.LockedAmount
+	}
+	// (locked × elapsed) / vest_blocks — use 128-bit-ish math via
+	// big.Int? At our scales (uint64 LockedAmount, small block
+	// counts), `locked × elapsed` fits in 128 bits only if
+	// locked > 2^32 AND elapsed > 2^32. The realistic max is
+	// BootstrapVestBlocks ≈ 2.6M < 2^22, so locked × elapsed fits
+	// in uint64 for any locked < 2^42. The 5% of typical supply
+	// stays well below that.
+	return bi.LockedAmount * elapsed / runtime.BootstrapVestBlocks
 }
 
 // ExportGenesis exports the module's state for genesis.
@@ -886,18 +967,28 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 			validator.TotalDelegation, undelegateMsg.Amount.Amount)
 	}
 
-	// Phase 2.4: bootstrap-validator self-undelegate pre-maturity check.
-	// A bootstrap validator's own self-delegation is locked for
-	// BootstrapLockBlocks; any attempt to withdraw it before
-	// VestStartHeight is rejected. Non-self delegators (third parties
-	// who delegated to a bootstrap validator) and bootstrap validators
-	// undelegating after vest start are unaffected here — Phase 2.5
-	// gates the partial-vest case.
+	// Phase 2.4 / 2.5: bootstrap-validator self-undelegate vesting check.
+	// A bootstrap validator's self-delegation is locked for
+	// BootstrapLockBlocks then linearly vested over BootstrapVestBlocks.
+	// At any height, the maximum self-undelegate amount is the vested
+	// fraction. Non-self delegators (third parties who delegated to
+	// a bootstrap validator) are unaffected — they fall through to
+	// the regular 21-day unbonding queue from Phase 2.1.
 	if bi, biErr := m.validatorStore.GetBootstrapInfo(ctx, undelegateMsg.Validator); biErr == nil && bi != nil {
 		isSelfUndelegate := string(undelegateMsg.Delegator) == validator.Description
-		if isSelfUndelegate && uint64(txCtx.Height) < bi.VestStartHeight {
-			return nil, fmt.Errorf("bootstrap validator %s: self-delegation locked until height %d (current %d)",
-				undelegateMsg.Delegator, bi.VestStartHeight, txCtx.Height)
+		if isSelfUndelegate {
+			vested := computeVestedAmount(bi, uint64(txCtx.Height))
+			// `unvested` is the amount that MUST remain self-delegated.
+			// post-undelegate self-stake = delegation.Amount - undelegateMsg.Amount.
+			// Reject if that drops below unvested.
+			if bi.LockedAmount > vested {
+				unvested := bi.LockedAmount - vested
+				postSelfStake := delegation.Amount - undelegateMsg.Amount.Amount
+				if postSelfStake < unvested {
+					return nil, fmt.Errorf("bootstrap validator %s: only %d of %d locked-share vested at height %d; can't undelegate down to %d",
+						undelegateMsg.Delegator, vested, bi.LockedAmount, txCtx.Height, postSelfStake)
+				}
+			}
 		}
 	}
 

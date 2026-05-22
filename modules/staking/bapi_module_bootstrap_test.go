@@ -22,7 +22,13 @@ func newBootstrapFixture(t *testing.T) (*BAPIStakingModule, *store.BAPIValidator
 	mod, err := NewBAPIStakingModule(provider.GetValidatorStore(), provider.GetBalanceStore())
 	require.NoError(t, err)
 	exec := effects.NewBAPIExecutor(provider)
-	return mod, provider.GetValidatorStore(), provider.GetBalanceStore(), exec, context.Background()
+	// Seed module.bl with a generous balance so SeedBootstrapValidators
+	// can debit the per-validator share. In production this is done by
+	// the runtime's protocol-account seeding step (Phase 0.6); tests
+	// bypass that and call SeedBootstrapValidators directly.
+	ctx := context.Background()
+	require.NoError(t, provider.GetBalanceStore().Set(ctx, "module.bl", "stake", 1_000_000_000_000))
+	return mod, provider.GetValidatorStore(), provider.GetBalanceStore(), exec, ctx
 }
 
 // TestSeedBootstrapValidators_CreatesAllState exercises the runtime
@@ -79,11 +85,14 @@ func TestSeedBootstrapValidators_CreatesAllState(t *testing.T) {
 	require.Len(t, set, 2)
 }
 
-// TestBootstrap_SelfUndelegatePreVestRejected pins the Phase 2.4
-// lockup: a bootstrap validator's self-undelegate before
-// VestStartHeight must reject with a clear error.
+// TestBootstrap_SelfUndelegatePreVestRejected pins Phase 2.5's
+// linear-vest gating: a bootstrap validator's self-undelegate
+// cannot bring the self-stake below the unvested portion. At
+// VestStartHeight the vested amount is still 0; at
+// VestStartHeight + 30d/2 it's half; at VestStartHeight + 30d
+// it's full.
 func TestBootstrap_SelfUndelegatePreVestRejected(t *testing.T) {
-	mod, vs, bs, _, ctx := newBootstrapFixture(t)
+	mod, _, _, _, ctx := newBootstrapFixture(t)
 
 	pubKey := make([]byte, 32)
 	pubKey[0] = 0xaa
@@ -92,36 +101,66 @@ func TestBootstrap_SelfUndelegatePreVestRejected(t *testing.T) {
 	const vestStart uint64 = 5_000
 
 	require.NoError(t, mod.SeedBootstrapValidators(ctx, []runtime.BootstrapValidator{bv}, perVal, vestStart))
-	// Ensure staking.pool has the tokens so the would-be transfer
-	// could be funded if it were allowed.
-	require.NoError(t, bs.Set(ctx, "staking.pool", "stake", perVal))
 
-	// Self-undelegate at height 100 — well before vestStart=5000.
-	txCtx := &runtime.BAPITxContext{
-		BAPIBlockContext: &runtime.BAPIBlockContext{Height: 100},
-		Account:          bv.Name,
+	tryUndelegate := func(height, amount uint64) error {
+		_, err := mod.handleUndelegate(ctx, &runtime.BAPITxContext{
+			BAPIBlockContext: &runtime.BAPIBlockContext{Height: height},
+			Account:          bv.Name,
+		}, &MsgUndelegate{
+			Delegator: bv.Name,
+			Validator: pubKey,
+			Amount:    ptypes.Coin{Denom: "stake", Amount: amount},
+		})
+		return err
 	}
-	_, err := mod.handleUndelegate(ctx, txCtx, &MsgUndelegate{
-		Delegator: bv.Name,
-		Validator: pubKey,
-		Amount:    ptypes.Coin{Denom: "stake", Amount: 100},
-	})
+
+	// Before vest start: vested = 0, no amount is permitted.
+	err := tryUndelegate(100, 1)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "locked until height")
+	assert.Contains(t, err.Error(), "vested at height")
 
-	// Same call at height >= vestStart succeeds (Phase 2.5 will
-	// add the partial-vest check; for now we just verify the lock
-	// gate releases).
-	txCtx.BAPIBlockContext.Height = vestStart
-	_, err = mod.handleUndelegate(ctx, txCtx, &MsgUndelegate{
+	// At vest start: vested = 0 still (elapsed = 0).
+	err = tryUndelegate(vestStart, 1)
+	require.Error(t, err)
+
+	// Halfway through vesting: vested ≈ LockedAmount / 2. We can
+	// undelegate up to half.
+	halfwayHeight := vestStart + runtime.BootstrapVestBlocks/2
+	err = tryUndelegate(halfwayHeight, perVal/2-1) // safely under half
+	require.NoError(t, err, "halfway through vest, half of locked is unlocked")
+
+	// Re-seed and try to over-undelegate at halfway.
+	mod2, _, _, _, ctx2 := newBootstrapFixture(t)
+	require.NoError(t, mod2.SeedBootstrapValidators(ctx2, []runtime.BootstrapValidator{bv}, perVal, vestStart))
+	_, err = mod2.handleUndelegate(ctx2, &runtime.BAPITxContext{
+		BAPIBlockContext: &runtime.BAPIBlockContext{Height: halfwayHeight},
+		Account:          bv.Name,
+	}, &MsgUndelegate{
 		Delegator: bv.Name,
 		Validator: pubKey,
-		Amount:    ptypes.Coin{Denom: "stake", Amount: 100},
+		Amount:    ptypes.Coin{Denom: "stake", Amount: perVal/2 + 1},
 	})
-	require.NoError(t, err, "self-undelegate at vestStartHeight should succeed (vesting gate, not the partial-vest check)")
+	require.Error(t, err, "can't undelegate more than the vested portion at halfway")
 
-	// Avoid unused var on vs.
-	_, _ = vs.GetValidator(ctx, pubKey)
+	// At/after vest end: full amount can be undelegated.
+	mod3, _, _, _, ctx3 := newBootstrapFixture(t)
+	require.NoError(t, mod3.SeedBootstrapValidators(ctx3, []runtime.BootstrapValidator{bv}, perVal, vestStart))
+	require.NoError(t, tryUndelegate2(t, mod3, ctx3, bv, pubKey, vestStart+runtime.BootstrapVestBlocks, perVal))
+}
+
+// tryUndelegate2 is a small helper so the mod3 leg of the test
+// above stays readable.
+func tryUndelegate2(t *testing.T, mod *BAPIStakingModule, ctx context.Context, bv runtime.BootstrapValidator, pubKey []byte, height, amount uint64) error {
+	t.Helper()
+	_, err := mod.handleUndelegate(ctx, &runtime.BAPITxContext{
+		BAPIBlockContext: &runtime.BAPIBlockContext{Height: height},
+		Account:          bv.Name,
+	}, &MsgUndelegate{
+		Delegator: bv.Name,
+		Validator: pubKey,
+		Amount:    ptypes.Coin{Denom: "stake", Amount: amount},
+	})
+	return err
 }
 
 // TestBootstrap_NonSelfDelegatorUnaffected: a third-party delegator
