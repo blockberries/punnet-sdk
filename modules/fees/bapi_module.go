@@ -277,4 +277,71 @@ var (
 	_ runtime.BAPIBlockProcessor     = (*BAPIFeesModule)(nil)
 	_ runtime.BAPIGenesisInitializer = (*BAPIFeesModule)(nil)
 	_ runtime.BAPIGenesisExporter    = (*BAPIFeesModule)(nil)
+	_ runtime.BAPIModuleParams       = (*BAPIFeesModule)(nil)
 )
+
+// Parameter names governance proposals can reference. The "op_fee:"
+// prefix carries the message-type identifier as a suffix:
+//
+//	op_fee:/bank.MsgSend
+//
+// PLAN §7 Phase 4.5.
+const (
+	ParamByteFee   = "byte_fee"
+	ParamOpFeePref = "op_fee:"
+)
+
+// ApplyParameterChange implements runtime.BAPIModuleParams. The
+// governance enactment hook (Phase 4.4) calls this on each Change
+// targeting the "fees" module. Two parameter shapes:
+//
+//   - "byte_fee"             : update FeeSchedule.ByteFee
+//   - "op_fee:<message_type>": upsert FeeSchedule.OpFees[message_type]
+//
+// Both validate value bounds (must fit uint64). MsgProposeFeeUpdate
+// (Phase 1.2 stub) remains rejected — the canonical path is
+// MsgSubmitProposal with one or more Changes targeting "fees".
+func (m *BAPIFeesModule) ApplyParameterChange(ctx context.Context, name string, newValue int64) error {
+	if m == nil || m.scheduleStore == nil {
+		return fmt.Errorf("module not initialized")
+	}
+	if newValue < 0 {
+		return fmt.Errorf("fee parameter %q: value must be non-negative", name)
+	}
+
+	current, err := m.scheduleStore.Get(ctx, keyCurrentSchedule)
+	if err != nil {
+		current = FeeSchedule{}
+	}
+
+	switch {
+	case name == ParamByteFee:
+		current.ByteFee = uint64(newValue)
+	case len(name) > len(ParamOpFeePref) && name[:len(ParamOpFeePref)] == ParamOpFeePref:
+		messageType := name[len(ParamOpFeePref):]
+		current.OpFees = upsertOpFee(current.OpFees, messageType, uint64(newValue))
+	default:
+		return fmt.Errorf("fees module does not own parameter %q (want %s or %s<msg-type>)",
+			name, ParamByteFee, ParamOpFeePref)
+	}
+
+	if err := current.Validate(); err != nil {
+		return fmt.Errorf("post-change schedule invalid: %w", err)
+	}
+	return m.scheduleStore.Set(ctx, keyCurrentSchedule, current)
+}
+
+// upsertOpFee returns a sorted OpFees slice with the given
+// (messageType, amount) entry inserted or replaced. The slice
+// invariant — sorted by MessageType — is preserved so the binary
+// search in FeeSchedule.OpFee continues to work.
+func upsertOpFee(entries []OpFeeEntry, messageType string, amount uint64) []OpFeeEntry {
+	for i := range entries {
+		if entries[i].MessageType == messageType {
+			entries[i].Amount = amount
+			return entries
+		}
+	}
+	entries = append(entries, OpFeeEntry{MessageType: messageType, Amount: amount})
+	return SortedOpFees(entries)
+}
