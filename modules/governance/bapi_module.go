@@ -156,6 +156,13 @@ type BAPIGovernanceModule struct {
 	threshold      uint32 // basis points
 	vetoThreshold  uint32 // basis points
 	depositDenom   string
+
+	// Parameters is the chain-wide registry of governance-tunable
+	// parameter bands. Populated by modules at construction or
+	// genesis time; consulted by the enactment hook (Phase 4.4)
+	// before applying a proposal-driven parameter change.
+	// PLAN §7 Phase 4.3.
+	Parameters *ParameterRegistry
 }
 
 // NewBAPIGovernanceModule creates a new BAPI governance module with the given stores.
@@ -177,6 +184,7 @@ func NewBAPIGovernanceModule(proposalStore *store.BAPIProposalStore, balanceStor
 		threshold:     DefaultThreshold,
 		vetoThreshold: DefaultVetoThreshold,
 		depositDenom:  DefaultDepositDenom,
+		Parameters:    NewParameterRegistry(),
 	}, nil
 }
 
