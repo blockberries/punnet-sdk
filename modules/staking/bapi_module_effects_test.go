@@ -363,57 +363,6 @@ func TestProcessEvidence_EmptyPubkeyEmitsEvent(t *testing.T) {
 	}
 }
 
-// TestProcessEvidence_LightClientAttackSlashes verifies that light-client
-// attack evidence triggers the same slash + jail as double-vote evidence.
-// Reason label on the event must be "light_client_attack".
-func TestProcessEvidence_LightClientAttackSlashes(t *testing.T) {
-	h := newStakingHarness(t)
-	ctx := context.Background()
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-
-	pubKey := []byte("any-pubkey-here-is-fine-for-tst")
-	const initialPower uint64 = 1_000_000
-	require.NoError(t, h.store.SetValidator(ctx, &store.BAPIValidator{
-		PubKey: types.PublicKey{
-			Type: types.KeyTypeEd25519,
-			Data: pubKey,
-		},
-		Power:           initialPower,
-		TotalDelegation: initialPower,
-	}))
-
-	ev := types.Evidence{
-		Type: types.EvidenceTypeLightClient,
-		PubKey: types.PublicKey{
-			Type: types.KeyTypeEd25519,
-			Data: pubKey,
-		},
-	}
-	effs, err := h.mod.ProcessEvidence(ctx, h.blockCtx, ev)
-	require.NoError(t, err)
-	require.NotEmpty(t, effs, "LightClient evidence must produce effects")
-
-	var sawWrite, sawEvent bool
-	for _, e := range effs {
-		switch typed := e.(type) {
-		case *effects.WriteEffect[*store.BAPIValidator]:
-			sawWrite = true
-			require.True(t, typed.Value.Jailed, "slashed validator must be jailed")
-			require.Less(t, typed.Value.Power, initialPower,
-				"slashed validator power must decrease")
-		case effects.EventEffect:
-			if typed.EventType == "staking.validator_slashed" {
-				sawEvent = true
-				require.Equal(t, []byte("light_client_attack"),
-					typed.Attributes["reason"],
-					"reason label must be light_client_attack")
-			}
-		}
-	}
-	require.True(t, sawWrite, "missing WriteEffect for slashed validator")
-	require.True(t, sawEvent, "missing staking.validator_slashed event")
-}
-
 // TestProcessEvidence_UnknownTypeIsNoOp pins that future evidence types we
 // do not recognize are silently accepted for forward compatibility.
 func TestProcessEvidence_UnknownTypeIsNoOp(t *testing.T) {
@@ -453,12 +402,12 @@ func TestProcessEvidence_SlashFractionFromParams(t *testing.T) {
 		TotalDelegation: initialPower,
 	}))
 
-	// Light-client attack with a custom 50% override (5000 bps).
+	// Duplicate-vote with a custom 50% override (5000 bps).
 	h.blockCtx.Params = &types.ConsensusParams{
-		SlashFractionLightClientBps: 5000,
+		SlashFractionDoubleSignBps: 5000,
 	}
 	ev := types.Evidence{
-		Type:   types.EvidenceTypeLightClient,
+		Type:   types.EvidenceTypeDuplicateVote,
 		PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
 	}
 	effs, err := h.mod.ProcessEvidence(ctx, h.blockCtx, ev)

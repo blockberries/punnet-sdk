@@ -126,19 +126,19 @@ func TestSlash_CreditsToCommonTreasury(t *testing.T) {
 }
 
 // TestSlash_SeveritySpec covers the three severity values listed in
-// PLAN 2.6:
+// spec §9 (PLAN 2.6):
 //
-//   - DuplicateVote     -> DefaultSlashFractionDoubleSignBps         (500 bps)
-//   - LightClient       -> DefaultSlashFractionLightClientBps        (1000 bps)
-//   - Liveness/Leader   -> constants are exported even though wire
-//                          support is pending — pin them so a future
-//                          ConsensusParams field plus evidence-type
-//                          wiring lands at the spec values.
+//   - DuplicateVote (equivocation)   -> 500 bps (5%)
+//   - Liveness                       -> 10 bps (0.1%)
+//   - Leader equivocation            -> 500 bps (5%)
+//
+// Liveness and leader-equivocation constants are exported even
+// though their wire support is pending in bapi's EvidenceType
+// enum — pinning them keeps the future plumbing change honest to
+// the spec values.
 func TestSlash_SeveritySpec(t *testing.T) {
 	assert.Equal(t, uint32(500), DefaultSlashFractionDoubleSignBps,
 		"§9 equivocation slash = 5%")
-	assert.Equal(t, uint32(1000), DefaultSlashFractionLightClientBps,
-		"light-client attack slash strictly higher than equivocation")
 	assert.Equal(t, uint32(10), DefaultSlashFractionLivenessBps,
 		"§9 liveness slash = 0.1%")
 	assert.Equal(t, uint32(500), DefaultSlashFractionLeaderEquivocationBps,

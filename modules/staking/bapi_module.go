@@ -162,19 +162,20 @@ func IsEpochCloseHeight(height uint64) bool {
 // constants below are also exported because callers may want to
 // reference them when constructing test genesis blobs.
 //
-// Spec §9 severity table — PLAN §7 Phase 2.6:
-//   - equivocation (double-vote)  : 5%   = 500 bps
-//   - liveness (extended downtime): 0.1% =  10 bps
-//   - leader equivocation         : 5%   = 500 bps
+// Spec §9 severity table — the ONLY three slash types the spec
+// recognises. Other bapi.EvidenceType values (including the
+// ambient EvidenceTypeLightClient that bapi carries for
+// cross-repo future-use) fall through to the unknown-type branch
+// in ProcessEvidence and produce no slash.
+//
+//	equivocation (double-vote)  : 5%   = 500 bps
+//	liveness (extended downtime): 0.1% =  10 bps
+//	leader equivocation         : 5%   = 500 bps
 const (
 	// DefaultSlashFractionDoubleSignBps: 500 = 5%. Applied for
 	// `EvidenceTypeDuplicateVote` — a validator that signed two
 	// conflicting blocks at the same height.
 	DefaultSlashFractionDoubleSignBps uint32 = 500
-	// DefaultSlashFractionLightClientBps: 1000 = 10%. Strictly higher
-	// than double-sign: light-client attacks target external observers
-	// who can't independently verify the slashable event.
-	DefaultSlashFractionLightClientBps uint32 = 1000
 	// DefaultSlashFractionLivenessBps: 10 = 0.1%. Smallest severity
 	// in the table; applied for prolonged downtime once a missed-
 	// block tracker (out of scope for Phase 2.6 — needs a per-block
@@ -230,25 +231,16 @@ const SlashFractionBasisPoints uint64 = uint64(DefaultSlashFractionDoubleSignBps
 // to evType under the block's ConsensusParams. Falls back to the
 // compiled-in default when params are absent or the per-type field is
 // zero (which also means "use the default" by convention).
+//
+// Only EvidenceTypeDuplicateVote is recognised here in v1 — spec §9
+// also defines liveness and leader-equivocation severities but
+// bapi's EvidenceType enum doesn't carry codes for them yet.
+// Unknown types fall through to ProcessEvidence's no-op branch.
 func slashFractionFor(params *types.ConsensusParams, evType types.EvidenceType) uint32 {
-	if params != nil {
-		switch evType {
-		case types.EvidenceTypeDuplicateVote:
-			if params.SlashFractionDoubleSignBps != 0 {
-				return params.SlashFractionDoubleSignBps
-			}
-		case types.EvidenceTypeLightClient:
-			if params.SlashFractionLightClientBps != 0 {
-				return params.SlashFractionLightClientBps
-			}
-		}
+	if params != nil && evType == types.EvidenceTypeDuplicateVote && params.SlashFractionDoubleSignBps != 0 {
+		return params.SlashFractionDoubleSignBps
 	}
-	switch evType {
-	case types.EvidenceTypeLightClient:
-		return DefaultSlashFractionLightClientBps
-	default:
-		return DefaultSlashFractionDoubleSignBps
-	}
+	return DefaultSlashFractionDoubleSignBps
 }
 
 // ProcessEvidence reacts to Byzantine evidence by slashing the offending
@@ -270,9 +262,11 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 	switch evidence.Type {
 	case types.EvidenceTypeDuplicateVote:
 		reason = "double_vote"
-	case types.EvidenceTypeLightClient:
-		reason = "light_client_attack"
 	default:
+		// Unknown / unsupported evidence type. Includes
+		// EvidenceTypeLightClient in bapi (no spec mandate) and
+		// any future types added cross-repo. Silently no-op for
+		// forward compatibility.
 		return nil, nil
 	}
 	slashBps := uint64(slashFractionFor(blockCtx.Params, evidence.Type))
