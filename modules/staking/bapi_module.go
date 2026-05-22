@@ -96,13 +96,15 @@ func (m *BAPIStakingModule) BeginBlock(_ context.Context, _ *runtime.BAPIBlockCo
 }
 
 // EpochBlocks is the chain-wide epoch length in blocks. PLAN D4:
-// epoch boundary = `Height % EpochBlocks == 0`. At a 1-second block
-// cadence this is one hour. Phase 3 emission, participation, and
-// distribution all key off this value.
+// epoch boundary = `Height % EpochBlocks == 0`. Tokenomics spec §3.4
+// and §6 fix the epoch at **1 day**; at a 1-second block cadence
+// that's 86,400 blocks. Phase 3 emission, participation, and
+// distribution all key off this value (Emission Pool drains per
+// epoch; F1 reward-per-share index updates at epoch close).
 //
 // A future ConsensusParams field will let governance change the
 // length; for v1 the constant is the single authoritative value.
-const EpochBlocks uint64 = 3600
+const EpochBlocks uint64 = 86_400
 
 // DefaultActiveSetSize is the maximum number of validators in the
 // active set when StakingGenesisState.ActiveSetSize is unset. Matches
