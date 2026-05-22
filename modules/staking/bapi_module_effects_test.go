@@ -244,146 +244,17 @@ func newStakingHarness(t *testing.T) *stakingHarness {
 	}
 }
 
-// TestEndBlock_EmitsValidatorUpdateForNewValidator is the primary B2-2
-// check: when handleCreateValidator runs in a block, EndBlock returns a
-// ValidatorUpdate matching the new validator's power.
-func TestEndBlock_EmitsValidatorUpdateForNewValidator(t *testing.T) {
-	h := newStakingHarness(t)
-	ctx := context.Background()
-
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-
-	pubKey := []byte("validator-end-block-test-pk-1")
-	createMsg := &MsgCreateValidator{
-		Delegator:    h.delegator,
-		PubKey:       pubKey,
-		InitialPower: 77,
-		Commission:   500,
-	}
-	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, createMsg)
-	require.NoError(t, err)
-	_, err = h.exec.Execute(effs)
-	require.NoError(t, err)
-
-	endEffects, updates, err := h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	assert.Nil(t, endEffects, "staking EndBlock returns no effects")
-	require.Len(t, updates, 1)
-	assert.Equal(t, uint64(77), updates[0].Power)
-	assert.Equal(t, pubKey, updates[0].PubKey.Data)
-	assert.Equal(t, types.KeyTypeEd25519, updates[0].PubKey.Type)
-}
-
-// TestEndBlock_NoUpdatesWhenNothingChanged verifies the "diff" property:
-// an EndBlock with no dirty validators returns nil updates, and an EndBlock
-// whose dirty validators have the same power as last block also returns nil.
-func TestEndBlock_NoUpdatesWhenNothingChanged(t *testing.T) {
-	h := newStakingHarness(t)
-	ctx := context.Background()
-
-	// Block 1: create validator at power 50, EndBlock emits.
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-	pubKey := []byte("validator-no-change-pk-1234567")
-	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator:    h.delegator,
-		PubKey:       pubKey,
-		InitialPower: 50,
-		Commission:   500,
-	})
-	require.NoError(t, err)
-	_, err = h.exec.Execute(effs)
-	require.NoError(t, err)
-	_, updates, err := h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	require.Len(t, updates, 1)
-
-	// Block 2: BeginBlock with NO further changes — EndBlock returns nil.
-	h.blockCtx.Height++
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-	_, updates, err = h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	assert.Nil(t, updates, "no dirty validators must produce no updates")
-}
-
-// TestEndBlock_EmitsZeroPowerOnDeletion confirms that a validator removed
-// from the store between BeginBlock and EndBlock surfaces as Power=0 — BAPI's
-// canonical "validator removed" signal.
-func TestEndBlock_EmitsZeroPowerOnDeletion(t *testing.T) {
-	h := newStakingHarness(t)
-	ctx := context.Background()
-
-	// Block 1: create validator.
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-	pubKey := []byte("validator-deletion-pk-12345678")
-	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator:    h.delegator,
-		PubKey:       pubKey,
-		InitialPower: 10,
-		Commission:   500,
-	})
-	require.NoError(t, err)
-	_, err = h.exec.Execute(effs)
-	require.NoError(t, err)
-	_, _, err = h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-
-	// Block 2: simulate an external removal of the validator, then mark
-	// dirty so EndBlock sees it.
-	h.blockCtx.Height++
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-	require.NoError(t, h.store.DeleteValidator(ctx, pubKey))
-	h.mod.markValidatorDirty(pubKey)
-
-	_, updates, err := h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	require.Len(t, updates, 1)
-	assert.Equal(t, uint64(0), updates[0].Power, "removed validator must report Power=0")
-}
-
-// TestEndBlock_DeterministicOrdering pins down the sorted-by-hex emission
-// invariant. Two validators created in arbitrary order must appear in
-// lexicographic-pubkey order in the ValidatorUpdates slice.
-func TestEndBlock_DeterministicOrdering(t *testing.T) {
-	h := newStakingHarness(t)
-	ctx := context.Background()
-
-	pkLow := []byte("01-low-priority-validator-key0")
-	pkHigh := []byte("99-high-priority-validator-key")
-
-	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
-
-	// Create the high-pubkey one FIRST so insertion order is reversed from
-	// sorted order; if EndBlock weren't sorting, we'd see [high, low].
-	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator: h.delegator, PubKey: pkHigh, InitialPower: 200, Commission: 500,
-	})
-	require.NoError(t, err)
-	_, err = h.exec.Execute(effs)
-	require.NoError(t, err)
-
-	effs, err = h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator: h.delegator, PubKey: pkLow, InitialPower: 100, Commission: 500,
-	})
-	require.NoError(t, err)
-	_, err = h.exec.Execute(effs)
-	require.NoError(t, err)
-
-	_, updates, err := h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	require.Len(t, updates, 2)
-	assert.Equal(t, pkLow, updates[0].PubKey.Data, "lower hex pubkey emitted first")
-	assert.Equal(t, pkHigh, updates[1].PubKey.Data)
-}
-
 // mustNilErr unwraps a (someThing, err) result keeping only the error,
 // because t.Helper-style chaining keeps the test body readable.
 func mustNilErr(_ []effects.Effect, err error) error { return err }
 
-// TestProcessEvidence_SlashesValidatorPower verifies PLAN C2: when the
-// staking module receives DuplicateVote evidence for a known validator, it
-// returns a WriteEffect that — once executed — reduces the validator's power
-// by SlashFractionBasisPoints and marks the validator dirty so EndBlock
-// emits the post-slash power as a ValidatorUpdate.
+// TestProcessEvidence_SlashesValidatorPower verifies the slashing
+// effect itself: when the staking module receives DuplicateVote
+// evidence for a known validator, the returned WriteEffect reduces
+// the validator's stored Power by the configured fraction and marks
+// it Jailed. Per Phase 2.3 the slashed-power ValidatorUpdate now
+// surfaces at the next epoch-close EndBlock (covered in
+// bapi_module_epoch_test.go), not in the same-block EndBlock.
 func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	h := newStakingHarness(t)
 	ctx := context.Background()
@@ -391,7 +262,6 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	pubKey := []byte("evidence-target-validator-pk-1")
 	const initialPower uint64 = 1000
 
-	// Seed a validator at initialPower.
 	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
 	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
 		Delegator:    h.delegator,
@@ -402,12 +272,7 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
 	require.NoError(t, err)
-	// Drain the initial create-validator update so the next EndBlock only
-	// sees the slash.
-	_, _, err = h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
 
-	// New block: deliver evidence and run the resulting effects.
 	h.blockCtx.Height++
 	require.NoError(t, mustNilErr(h.mod.BeginBlock(ctx, h.blockCtx)))
 
@@ -428,7 +293,6 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	_, err = h.exec.Execute(slashEffs)
 	require.NoError(t, err)
 
-	// The validator must now be at the post-slash power.
 	expectedSlash := (initialPower * SlashFractionBasisPoints) / 10000
 	expectedPower := initialPower - expectedSlash
 	v, err := h.store.GetValidator(ctx, pubKey)
@@ -436,13 +300,6 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 	require.NotNil(t, v)
 	assert.Equal(t, expectedPower, v.Power, "post-slash power must match SlashFractionBasisPoints")
 	assert.True(t, v.Jailed, "slashed validator must be jailed")
-
-	// EndBlock must emit a ValidatorUpdate with the post-slash power.
-	_, updates, err := h.mod.EndBlock(ctx, h.blockCtx)
-	require.NoError(t, err)
-	require.Len(t, updates, 1, "EndBlock must emit exactly the slashed validator")
-	assert.Equal(t, expectedPower, updates[0].Power)
-	assert.Equal(t, pubKey, updates[0].PubKey.Data)
 }
 
 // TestProcessEvidence_UnknownValidatorIsNonFatal verifies that evidence for

@@ -86,7 +86,7 @@ func TestExecuteBlock_EvidenceFlowsToStakingAndEndBlockEmitsSlashedPower(t *test
 			Data: pubKey,
 		},
 	}
-	outcome, err := app.ExecuteBlock(ctx, types.FinalizedBlock{
+	_, err = app.ExecuteBlock(ctx, types.FinalizedBlock{
 		Height:   2,
 		Time:     types.TimeToTimestamp(time.Now()),
 		Evidence: []types.Evidence{ev},
@@ -95,20 +95,13 @@ func TestExecuteBlock_EvidenceFlowsToStakingAndEndBlockEmitsSlashedPower(t *test
 		t.Fatalf("block 2 ExecuteBlock: %v", err)
 	}
 
-	if len(outcome.ValidatorUpdates) != 1 {
-		t.Fatalf("expected 1 ValidatorUpdate from slash, got %d", len(outcome.ValidatorUpdates))
-	}
+	// Phase 2.3: the slash applies immediately to the validator
+	// store, but the ValidatorUpdate emission moves to the next
+	// epoch-close EndBlock (D6 — mid-epoch power changes
+	// accumulate). The chain-level acceptance is therefore "store
+	// reflects the slash", not "same-block ValidatorUpdate emitted".
 	expectedSlash := (initialPower * staking.SlashFractionBasisPoints) / 10000
 	expectedPower := initialPower - expectedSlash
-	got := outcome.ValidatorUpdates[0]
-	if got.Power != expectedPower {
-		t.Errorf("post-slash power: got %d, want %d", got.Power, expectedPower)
-	}
-	if string(got.PubKey.Data) != string(pubKey) {
-		t.Errorf("post-slash pubkey: got %x, want %x", got.PubKey.Data, pubKey)
-	}
-
-	// Verify the on-disk validator record reflects the slash too.
 	v, err := provider.GetValidatorStore().GetValidator(ctx, pubKey)
 	if err != nil {
 		t.Fatalf("read slashed validator: %v", err)
@@ -202,7 +195,7 @@ func TestExecuteBlock_EvidenceUsesConsensusParamsSlashFraction(t *testing.T) {
 			Data: pubKey,
 		},
 	}
-	outcome, err := app.ExecuteBlock(ctx, types.FinalizedBlock{
+	_, err = app.ExecuteBlock(ctx, types.FinalizedBlock{
 		Height:   2,
 		Time:     types.TimeToTimestamp(time.Now()),
 		Evidence: []types.Evidence{ev},
@@ -211,15 +204,20 @@ func TestExecuteBlock_EvidenceUsesConsensusParamsSlashFraction(t *testing.T) {
 		t.Fatalf("block 2 ExecuteBlock: %v", err)
 	}
 
-	if len(outcome.ValidatorUpdates) != 1 {
-		t.Fatalf("expected 1 ValidatorUpdate, got %d", len(outcome.ValidatorUpdates))
-	}
+	// Phase 2.3: ValidatorUpdate emission moves to epoch-close.
+	// Verify the slash applied correctly in the validator store.
 	expectedSlash := (initialPower * uint64(overrideBps)) / 10000
 	expectedPower := initialPower - expectedSlash
-	got := outcome.ValidatorUpdates[0]
-	if got.Power != expectedPower {
-		t.Errorf("ValidatorUpdate.Power: got %d, want %d (initial=%d, bps=%d)",
-			got.Power, expectedPower, initialPower, overrideBps)
+	v, err := provider.GetValidatorStore().GetValidator(ctx, pubKey)
+	if err != nil {
+		t.Fatalf("read slashed validator: %v", err)
+	}
+	if v == nil {
+		t.Fatalf("slashed validator missing from store")
+	}
+	if v.Power != expectedPower {
+		t.Errorf("post-slash store power: got %d, want %d (initial=%d, bps=%d)",
+			v.Power, expectedPower, initialPower, overrideBps)
 	}
 }
 

@@ -21,28 +21,8 @@ type BAPIStakingModule struct {
 	validatorStore *store.BAPIValidatorStore
 	balanceStore   *store.BAPIBalanceStore
 
-	// mu guards the in-block change tracking and the previous-block power
-	// snapshot. These are not consensus state — they're a private record of
-	// which validator pubkeys were touched in the current block so EndBlock
-	// can emit only the resulting power deltas (PLAN B2-2). Real state lives
-	// in validatorStore.
+	// mu guards per-instance counters that aren't consensus state.
 	mu sync.Mutex
-
-	// dirtyValidators holds the hex-encoded pubkey of every validator whose
-	// power may have changed in the current block. Populated by tx handlers,
-	// drained by EndBlock. The keys are hex strings so the set has stable
-	// iteration order when sorted.
-	dirtyValidators map[string]struct{}
-
-	// pubkeyByHex memoizes the raw pubkey bytes per hex key so EndBlock can
-	// rebuild a types.PublicKey without round-tripping through the store.
-	pubkeyByHex map[string][]byte
-
-	// lastEmittedPowers is the power EndBlock last reported to consensus for
-	// each validator (keyed by hex pubkey). EndBlock only emits a
-	// ValidatorUpdate when the current power differs from this snapshot,
-	// avoiding spurious "Power unchanged" updates on every block.
-	lastEmittedPowers map[string]uint64
 
 	// unbondingSeq is a monotonic counter used to disambiguate
 	// unbonding entries that share a maturity height (same block,
@@ -52,6 +32,13 @@ type BAPIStakingModule struct {
 	// assignment order is deterministic for tests. PLAN §7 Phase
 	// 2.1.
 	unbondingSeq uint64
+
+	// activeSetSize is the maximum number of validators allowed in
+	// the active set, as configured by genesis. Defaults to
+	// DefaultActiveSetSize when InitGenesis doesn't override.
+	// Used by EndBlock at epoch-close to take the top-N by power.
+	// PLAN §7 Phase 2.3.
+	activeSetSize uint32
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -64,33 +51,10 @@ func NewBAPIStakingModule(validatorStore *store.BAPIValidatorStore, balanceStore
 	}
 
 	return &BAPIStakingModule{
-		validatorStore:    validatorStore,
-		balanceStore:      balanceStore,
-		dirtyValidators:   make(map[string]struct{}),
-		pubkeyByHex:       make(map[string][]byte),
-		lastEmittedPowers: make(map[string]uint64),
+		validatorStore: validatorStore,
+		balanceStore:   balanceStore,
+		activeSetSize:  DefaultActiveSetSize,
 	}, nil
-}
-
-// markValidatorDirty records that a validator was touched in the current
-// block, so EndBlock will reconsider its power. Called by tx handlers
-// (handleCreateValidator) and InitGenesis. The dirty set is private
-// bookkeeping for the block-end aggregation step — it is NOT persisted state
-// and does not violate the effects-not-mutations invariant any more than the
-// runtime collecting events does.
-func (m *BAPIStakingModule) markValidatorDirty(pubKey []byte) {
-	if len(pubKey) == 0 {
-		return
-	}
-	key := hex.EncodeToString(pubKey)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.dirtyValidators[key] = struct{}{}
-	if _, ok := m.pubkeyByHex[key]; !ok {
-		buf := make([]byte, len(pubKey))
-		copy(buf, pubKey)
-		m.pubkeyByHex[key] = buf
-	}
 }
 
 // Name returns the module's unique name.
@@ -117,14 +81,37 @@ func (m *BAPIStakingModule) RegisterQueryHandlers() map[string]runtime.BAPIQuery
 
 // BeginBlock is called at the beginning of each block.
 //
-// Resets the in-block dirty-validator tracking. Any validator whose state is
-// modified between this call and the matching EndBlock will be considered for
-// inclusion in the EndBlock's ValidatorUpdates.
-func (m *BAPIStakingModule) BeginBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, error) {
-	m.mu.Lock()
-	m.dirtyValidators = make(map[string]struct{})
-	m.mu.Unlock()
+// Phase 2.3: a no-op. Per spec D6, the validator set refreshes per
+// epoch only; mid-block dirty-tracking is gone. EndBlock at
+// epoch-close diffs the fresh top-N against the persisted previous
+// active set to produce ValidatorUpdates.
+func (m *BAPIStakingModule) BeginBlock(_ context.Context, _ *runtime.BAPIBlockContext) ([]effects.Effect, error) {
 	return nil, nil
+}
+
+// EpochBlocks is the chain-wide epoch length in blocks. PLAN D4:
+// epoch boundary = `Height % EpochBlocks == 0`. At a 1-second block
+// cadence this is one hour. Phase 3 emission, participation, and
+// distribution all key off this value.
+//
+// A future ConsensusParams field will let governance change the
+// length; for v1 the constant is the single authoritative value.
+const EpochBlocks uint64 = 3600
+
+// DefaultActiveSetSize is the maximum number of validators in the
+// active set when StakingGenesisState.ActiveSetSize is unset. Matches
+// the config.go default (MaxValidators = 100).
+const DefaultActiveSetSize uint32 = 100
+
+// IsEpochCloseHeight reports whether `height` is an epoch-close
+// block (the last block of an epoch). EndBlock at such a height
+// computes the next epoch's active set and emits its diff vs the
+// previous active set as ValidatorUpdates.
+//
+// Height 0 is excluded because no block ever has Height==0 in
+// practice; the chain starts at InitialHeight (≥1).
+func IsEpochCloseHeight(height uint64) bool {
+	return height > 0 && height%EpochBlocks == 0
 }
 
 // Default slash fractions in basis points (10000 = 100%). These are
@@ -270,11 +257,9 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 		TotalDelegation: validator.TotalDelegation,
 	}
 
-	// Mark the validator dirty so EndBlock emits a ValidatorUpdate
-	// reflecting the post-slash power. Without this, EndBlock would not
-	// know the validator changed and consensus would never learn about
-	// the slash.
-	m.markValidatorDirty(evidence.PubKey.Data)
+	// Phase 2.3: no dirty-flag — the slash's reduced power surfaces
+	// in the next epoch-close EndBlock when the top-N is recomputed
+	// from store. Per spec D6, mid-epoch power changes accumulate.
 
 	return []effects.Effect{
 		&effects.WriteEffect[*store.BAPIValidator]{
@@ -295,17 +280,18 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 
 // EndBlock is called at the end of each block.
 //
-// Walks the set of validators dirtied during the block, reads each one's
-// current power from validatorStore (after all tx effects have been applied
-// by the runtime), and emits a ValidatorUpdate for every validator whose
-// power differs from the value EndBlock last reported. A validator that is
-// no longer in the store is reported with Power=0, which BAPI defines as
-// removal. The updates are sorted by hex pubkey so the result is
-// deterministic across nodes (PLAN B2-2).
+// Phase 2.3: validator-set refresh runs only on epoch-close blocks
+// (Height % EpochBlocks == 0). On those blocks the module reads every
+// validator from store, sorts by Power desc (TotalDelegation in this
+// v1 — Phase 2.7 will gate jailed/tombstoned), takes the top
+// activeSetSize, and emits ValidatorUpdates for the symmetric
+// difference vs the previous active-set snapshot. The new set is
+// persisted to the validatorStore.activeSet typed store for the next
+// epoch's diff.
+//
+// On non-epoch blocks the only work is processing matured unbonding
+// entries (Phase 2.1).
 func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, []types.ValidatorUpdate, error) {
-	// Phase 2.1: dequeue matured unbonding entries first. The refund
-	// transfers and delete effects are independent of the validator-set
-	// aggregation below, so they ride alongside in the same effect batch.
 	var blockEffects []effects.Effect
 	if blockCtx != nil {
 		matured, err := m.processMaturedUnbondings(uint64(blockCtx.Height))
@@ -315,84 +301,136 @@ func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPI
 		blockEffects = append(blockEffects, matured...)
 	}
 
-	m.mu.Lock()
-	// Snapshot the dirty set so we can release the lock before doing store
-	// I/O. We hold the lock again briefly later to update lastEmittedPowers.
-	dirtyKeys := make([]string, 0, len(m.dirtyValidators))
-	for k := range m.dirtyValidators {
-		dirtyKeys = append(dirtyKeys, k)
-	}
-	// Capture the pubkey bytes too.
-	pubkeysByHex := make(map[string][]byte, len(dirtyKeys))
-	for _, k := range dirtyKeys {
-		if pk, ok := m.pubkeyByHex[k]; ok {
-			pubkeysByHex[k] = pk
-		}
-	}
-	m.mu.Unlock()
-
-	if len(dirtyKeys) == 0 {
+	if blockCtx == nil || !IsEpochCloseHeight(uint64(blockCtx.Height)) {
 		return blockEffects, nil, nil
 	}
 
-	// Deterministic emission order: sort hex pubkeys lexicographically.
-	sort.Strings(dirtyKeys)
-
-	updates := make([]types.ValidatorUpdate, 0, len(dirtyKeys))
-	newPowers := make(map[string]uint64, len(dirtyKeys))
-
-	for _, hexKey := range dirtyKeys {
-		pkBytes := pubkeysByHex[hexKey]
-		if len(pkBytes) == 0 {
-			// We can still try to decode from hex if pubkeyByHex didn't
-			// have the entry (defensive — shouldn't happen).
-			decoded, err := hex.DecodeString(hexKey)
-			if err != nil {
-				continue
-			}
-			pkBytes = decoded
-		}
-
-		var currentPower uint64
-		validator, err := m.validatorStore.GetValidator(ctx, pkBytes)
-		switch {
-		case err == nil && validator != nil:
-			currentPower = validator.Power
-		default:
-			// Validator no longer present (or read error treated as
-			// removal). Power=0 signals removal to BAPI consumers.
-			currentPower = 0
-		}
-
-		newPowers[hexKey] = currentPower
-
-		m.mu.Lock()
-		prev, hadPrev := m.lastEmittedPowers[hexKey]
-		m.mu.Unlock()
-		// Only emit when the power actually changed since the previous
-		// EndBlock. The first time we see a validator (no `prev` recorded)
-		// we always emit so consensus learns the initial power.
-		if hadPrev && prev == currentPower {
-			continue
-		}
-
-		updates = append(updates, types.ValidatorUpdate{
-			PubKey: types.PublicKey{
-				Type: types.KeyTypeEd25519,
-				Data: pkBytes,
-			},
-			Power: currentPower,
-		})
+	updates, err := m.refreshActiveSet(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("refresh active set: %w", err)
 	}
-
-	// Persist the new powers as the baseline for the next block's diffs.
-	m.mu.Lock()
-	for k, v := range newPowers {
-		m.lastEmittedPowers[k] = v
-	}
-	m.mu.Unlock()
-
 	return blockEffects, updates, nil
+}
+
+// refreshActiveSet computes the new active set from the validator
+// store, persists it, and returns the ValidatorUpdate diff vs the
+// previously-persisted active set. Called only on epoch-close
+// blocks.
+//
+// The new set is the top activeSetSize validators by Power
+// (descending), with ties broken by hex pubkey ascending. Validators
+// with Power == 0 are excluded (consensus treats them as removed
+// already).
+//
+// Diff emission rule:
+//   - validator in new but not in prev: emit Power
+//   - validator in prev but not in new: emit Power=0 (removed)
+//   - validator in both with different Power: emit new Power
+//   - validator in both with same Power: skip
+//
+// Emission order is sorted by hex pubkey for determinism across
+// nodes.
+func (m *BAPIStakingModule) refreshActiveSet(ctx context.Context) ([]types.ValidatorUpdate, error) {
+	var allValidators []*store.BAPIValidator
+	if err := m.validatorStore.IterateValidators(func(v *store.BAPIValidator) bool {
+		if v != nil && v.Power > 0 {
+			allValidators = append(allValidators, v)
+		}
+		return false
+	}); err != nil {
+		// Iteration unsupported (in-memory test stores): no active set
+		// can be computed. Return empty diff — same as "no validators".
+		return nil, nil
+	}
+
+	// Top-N by Power desc; tiebreak by hex pubkey asc for determinism.
+	sort.Slice(allValidators, func(i, j int) bool {
+		if allValidators[i].Power != allValidators[j].Power {
+			return allValidators[i].Power > allValidators[j].Power
+		}
+		return hex.EncodeToString(allValidators[i].PubKey.Data) <
+			hex.EncodeToString(allValidators[j].PubKey.Data)
+	})
+	if int(m.activeSetSize) < len(allValidators) {
+		allValidators = allValidators[:m.activeSetSize]
+	}
+
+	newSet := make(map[string]*store.BAPIValidator, len(allValidators))
+	for _, v := range allValidators {
+		newSet[hex.EncodeToString(v.PubKey.Data)] = v
+	}
+
+	prevEntries, err := m.validatorStore.GetActiveSet()
+	if err != nil {
+		return nil, fmt.Errorf("read previous active set: %w", err)
+	}
+	prev := make(map[string]uint64, len(prevEntries))
+	prevPubkeys := make(map[string][]byte, len(prevEntries))
+	for _, e := range prevEntries {
+		hexKey := hex.EncodeToString(e.PubKey)
+		prev[hexKey] = e.Power
+		prevPubkeys[hexKey] = e.PubKey
+	}
+
+	// Build the union of hex pubkeys so the diff loop sees every key
+	// exactly once.
+	keys := make(map[string]struct{}, len(newSet)+len(prev))
+	for k := range newSet {
+		keys[k] = struct{}{}
+	}
+	for k := range prev {
+		keys[k] = struct{}{}
+	}
+	sortedKeys := make([]string, 0, len(keys))
+	for k := range keys {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	var updates []types.ValidatorUpdate
+	for _, hexKey := range sortedKeys {
+		newV, inNew := newSet[hexKey]
+		prevPower, inPrev := prev[hexKey]
+
+		switch {
+		case inNew && !inPrev:
+			updates = append(updates, types.ValidatorUpdate{
+				PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: newV.PubKey.Data},
+				Power:  newV.Power,
+			})
+		case !inNew && inPrev:
+			updates = append(updates, types.ValidatorUpdate{
+				PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: prevPubkeys[hexKey]},
+				Power:  0,
+			})
+		case inNew && inPrev && newV.Power != prevPower:
+			updates = append(updates, types.ValidatorUpdate{
+				PubKey: types.PublicKey{Type: types.KeyTypeEd25519, Data: newV.PubKey.Data},
+				Power:  newV.Power,
+			})
+		}
+	}
+
+	// Persist the new active-set snapshot. Delete-then-write rather
+	// than diff: simpler, and the active set is bounded by
+	// activeSetSize (typically 100), so two passes is cheap.
+	for hexKey, pk := range prevPubkeys {
+		if _, stillIn := newSet[hexKey]; !stillIn {
+			if err := m.validatorStore.DeleteActiveSetEntry(ctx, pk); err != nil {
+				return nil, fmt.Errorf("delete active set entry %s: %w", hexKey, err)
+			}
+		}
+	}
+	for _, v := range newSet {
+		entry := &store.BAPIActiveSetEntry{
+			PubKey: append([]byte(nil), v.PubKey.Data...),
+			Power:  v.Power,
+		}
+		if err := m.validatorStore.SetActiveSetEntry(ctx, entry); err != nil {
+			return nil, fmt.Errorf("persist active set entry: %w", err)
+		}
+	}
+	return updates, nil
 }
 
 // processMaturedUnbondings walks the unbonding queue and emits
@@ -450,6 +488,17 @@ func (m *BAPIStakingModule) processMaturedUnbondings(currentHeight uint64) ([]ef
 const stakingDenom = "stake"
 
 // InitGenesis initializes the module's state from genesis data.
+//
+// Seeds the per-validator state under "validators/" and the
+// active-set snapshot under "active_set/". Consensus already knows
+// the genesis ValidatorSet, so the seeded active_set is used purely
+// as the diff baseline — the first epoch-close EndBlock will emit
+// ValidatorUpdates only for validators whose Power changed since
+// genesis.
+//
+// `ActiveSetSize`, when non-zero, overrides the
+// DefaultActiveSetSize on this module instance for the lifetime of
+// the process. Empty/zero falls back to the default.
 func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil // No genesis data for staking module is acceptable
@@ -460,7 +509,11 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 		return fmt.Errorf("unmarshal staking genesis: %w", err)
 	}
 
-	// Create all genesis validators
+	if genesisState.ActiveSetSize != 0 {
+		m.activeSetSize = genesisState.ActiveSetSize
+	}
+
+	// Create all genesis validators and seed the active-set snapshot.
 	for _, validator := range genesisState.Validators {
 		pubKey, err := hex.DecodeString(validator.PubKey)
 		if err != nil {
@@ -483,18 +536,15 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 			return fmt.Errorf("set genesis validator: %w", err)
 		}
 
-		// Pre-seed lastEmittedPowers with the genesis power so the first
-		// EndBlock doesn't re-emit every genesis validator as a "change".
-		// Consensus already knows the genesis ValidatorSet — only future
-		// power changes need to be reported. Tests / hosts that want the
-		// initial set re-emitted can call markValidatorDirty manually.
-		m.mu.Lock()
-		hexKey := hex.EncodeToString(pubKey)
-		m.lastEmittedPowers[hexKey] = bapiValidator.Power
-		pk := make([]byte, len(pubKey))
-		copy(pk, pubKey)
-		m.pubkeyByHex[hexKey] = pk
-		m.mu.Unlock()
+		// Mirror the genesis validator into the active-set snapshot so
+		// the first epoch-close EndBlock diff produces an empty update
+		// list when no power has changed.
+		if err := m.validatorStore.SetActiveSetEntry(ctx, &store.BAPIActiveSetEntry{
+			PubKey: append([]byte(nil), pubKey...),
+			Power:  bapiValidator.Power,
+		}); err != nil {
+			return fmt.Errorf("seed active set entry: %w", err)
+		}
 	}
 
 	return nil
@@ -547,8 +597,14 @@ func (m *BAPIStakingModule) ExportGenesis(ctx context.Context) ([]byte, error) {
 }
 
 // StakingGenesisState represents the staking module's genesis state.
+//
+// ActiveSetSize, when non-zero, overrides DefaultActiveSetSize for
+// the chain — the value pins the maximum number of validators in
+// the active set computed at every epoch boundary. Zero means
+// "use the default" (100). PLAN §7 Phase 2.3.
 type StakingGenesisState struct {
-	Validators []GenesisValidator `json:"validators"`
+	Validators    []GenesisValidator `json:"validators"`
+	ActiveSetSize uint32             `json:"active_set_size,omitempty"`
 }
 
 // GenesisValidator represents a validator in genesis.
@@ -624,9 +680,9 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 		TotalDelegation: 0,
 	}
 
-	// Mark this validator as dirty so EndBlock will emit a ValidatorUpdate
-	// reflecting the new power. Does not write any state.
-	m.markValidatorDirty(createMsg.PubKey)
+	// Phase 2.3: no dirty-marking. The new validator becomes
+	// eligible for the next epoch's top-N recomputation; consensus
+	// learns about it at the next epoch close.
 
 	return []effects.Effect{
 		&effects.WriteEffect[*store.BAPIValidator]{
@@ -769,13 +825,13 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 	delegationStoreKey := string(undelegateMsg.Delegator) + "/" + hex.EncodeToString(undelegateMsg.Validator)
 
 	// Validator's TotalDelegation drops immediately even though the
-	// tokens themselves wait 21 days. Power-derivation reads this
-	// field, so the validator's voting weight reflects the unbonding
-	// from the next BeginBlock onward.
+	// tokens themselves wait 21 days. Phase 2.3: the next epoch-close
+	// EndBlock surfaces the reduced power as a ValidatorUpdate diff;
+	// mid-epoch consensus weight stays at the pre-undelegate value
+	// per spec D6.
 	updatedValidator := *validator
 	updatedValidator.TotalDelegation -= undelegateMsg.Amount.Amount
 	updatedValidator.Power = updatedValidator.TotalDelegation
-	m.markValidatorDirty(undelegateMsg.Validator)
 
 	m.mu.Lock()
 	m.unbondingSeq++

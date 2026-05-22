@@ -77,11 +77,25 @@ type BAPIUnbondingEntry struct {
 	Seq             uint64 `cramberry:"5"`
 }
 
+// BAPIActiveSetEntry is one validator's record in the previous-epoch
+// active set snapshot. The set is keyed by hex pubkey under
+// "active_set/"; EndBlock at epoch-close diffs the fresh top-N against
+// this snapshot to emit ValidatorUpdates, then replaces it.
+//
+// Power is the voting power as of the epoch close, not the current
+// TotalDelegation — they may differ when slashing or mid-epoch
+// delegation changes have accumulated.
+type BAPIActiveSetEntry struct {
+	PubKey []byte `cramberry:"1"`
+	Power  uint64 `cramberry:"2"`
+}
+
 // BAPIValidatorStore provides typed access to validator data.
 type BAPIValidatorStore struct {
 	validators  *TypedStore[*BAPIValidator]
 	delegations *TypedStore[*BAPIDelegation]
 	unbondings  *TypedStore[*BAPIUnbondingEntry]
+	activeSet   *TypedStore[*BAPIActiveSetEntry]
 }
 
 // NewBAPIValidatorStore creates a new validator store backed by blockberry's StateStore.
@@ -90,6 +104,7 @@ func NewBAPIValidatorStore(store statestore.StateStore) *BAPIValidatorStore {
 		validators:  NewTypedStore[*BAPIValidator](store, "validators/"),
 		delegations: NewTypedStore[*BAPIDelegation](store, "delegations/"),
 		unbondings:  NewTypedStore[*BAPIUnbondingEntry](store, "unbondings/"),
+		activeSet:   NewTypedStore[*BAPIActiveSetEntry](store, "active_set/"),
 	}
 }
 
@@ -395,4 +410,47 @@ func (s *BAPIValidatorStore) IterateMaturedUnbondings(currentHeight uint64, fn f
 		}
 		return fn(e)
 	})
+}
+
+// GetActiveSet returns the validator set last persisted by an
+// epoch-close EndBlock, sorted by hex pubkey for deterministic
+// diffing. An empty result is legitimate — it means no epoch has
+// closed yet (genesis-and-no-blocks chain).
+//
+// PLAN §7 Phase 2.3 / D6 (validator set refreshes per epoch).
+func (s *BAPIValidatorStore) GetActiveSet() ([]*BAPIActiveSetEntry, error) {
+	var out []*BAPIActiveSetEntry
+	err := s.activeSet.IterateRelative(func(_ string, e *BAPIActiveSetEntry) bool {
+		if e != nil {
+			out = append(out, e)
+		}
+		return false
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetActiveSetEntry persists one validator's row in the active set
+// snapshot. Called by EndBlock at epoch-close after computing the
+// new top-N.
+func (s *BAPIValidatorStore) SetActiveSetEntry(ctx context.Context, entry *BAPIActiveSetEntry) error {
+	if entry == nil {
+		return fmt.Errorf("entry is nil")
+	}
+	if len(entry.PubKey) == 0 {
+		return fmt.Errorf("pubkey empty")
+	}
+	return s.activeSet.Set(ctx, hex.EncodeToString(entry.PubKey), entry)
+}
+
+// DeleteActiveSetEntry removes a validator from the active set
+// snapshot. Used when an epoch boundary evicts a validator that was
+// in the previous active set.
+func (s *BAPIValidatorStore) DeleteActiveSetEntry(ctx context.Context, pubKey []byte) error {
+	if len(pubKey) == 0 {
+		return fmt.Errorf("pubkey empty")
+	}
+	return s.activeSet.Delete(ctx, hex.EncodeToString(pubKey))
 }
