@@ -252,6 +252,10 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 	newTotal := validator.TotalDelegation - slashAmt
 	newPower := newTotal // Power derives from TotalDelegation in v1.
 
+	// Phase 2.7: a validator already Jailed at slash time gets
+	// tombstoned — permanently removed from the active set even
+	// after future un-jail.
+	tombstone := validator.Tombstoned || validator.Jailed
 	updatedValidator := &store.BAPIValidator{
 		PubKey:          validator.PubKey,
 		Power:           newPower,
@@ -259,6 +263,7 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 		Description:     validator.Description,
 		Commission:      validator.Commission,
 		TotalDelegation: newTotal,
+		Tombstoned:      tombstone,
 	}
 
 	outEffects := []effects.Effect{
@@ -291,6 +296,10 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 		})
 	}
 
+	tombstoneAttr := []byte("false")
+	if tombstone {
+		tombstoneAttr = []byte("true")
+	}
 	outEffects = append(outEffects, effects.NewEventEffect("staking.validator_slashed", map[string][]byte{
 		"pub_key":    []byte(hex.EncodeToString(evidence.PubKey.Data)),
 		"prev_power": []byte(fmt.Sprintf("%d", prevPower)),
@@ -299,6 +308,7 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 		"slash_bps":  []byte(fmt.Sprintf("%d", slashBps)),
 		"height":     []byte(fmt.Sprintf("%d", blockCtx.Height)),
 		"reason":     []byte(reason),
+		"tombstoned": tombstoneAttr,
 	}))
 
 	return outEffects, nil
@@ -408,9 +418,13 @@ func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPI
 // Emission order is sorted by hex pubkey for determinism across
 // nodes.
 func (m *BAPIStakingModule) refreshActiveSet(ctx context.Context) ([]types.ValidatorUpdate, error) {
+	// Phase 2.7: exclude Jailed and Tombstoned validators from the
+	// active set. Their Power may still be > 0 (jailing only halts
+	// consensus participation, doesn't burn stake) so the Power
+	// filter alone isn't enough.
 	var allValidators []*store.BAPIValidator
 	if err := m.validatorStore.IterateValidators(func(v *store.BAPIValidator) bool {
-		if v != nil && v.Power > 0 {
+		if v != nil && v.Power > 0 && !v.Jailed && !v.Tombstoned {
 			allValidators = append(allValidators, v)
 		}
 		return false

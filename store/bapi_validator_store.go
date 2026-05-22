@@ -17,7 +17,8 @@ type BAPIValidator struct {
 	// Power is the current voting power (0 means removed)
 	Power uint64 `cramberry:"2"`
 
-	// Jailed indicates if the validator is jailed
+	// Jailed indicates if the validator is jailed (excluded from
+	// the active set, but may un-jail in the future).
 	Jailed bool `cramberry:"3"`
 
 	// Description contains human-readable validator info
@@ -28,6 +29,12 @@ type BAPIValidator struct {
 
 	// TotalDelegation is the total amount delegated to this validator
 	TotalDelegation uint64 `cramberry:"6"`
+
+	// Tombstoned indicates the validator has been permanently
+	// removed (e.g. double-slashed). Tombstoned validators can never
+	// re-enter the active set even if they un-jail.
+	// PLAN §7 Phase 2.7.
+	Tombstoned bool `cramberry:"7"`
 }
 
 // Address returns the validator's address (first 20 bytes of pubkey hash).
