@@ -2,6 +2,7 @@ package bank
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -320,19 +321,51 @@ func TestBAPIBankModule_HandleQueryBalance(t *testing.T) {
 }
 
 func TestBAPIBankModule_HandleQueryAllBalances(t *testing.T) {
-	mod, _ := createTestBankModule(t)
+	mod, balanceStore := createTestBankModule(t)
 	ctx := context.Background()
 
-	t.Run("returns placeholder response", func(t *testing.T) {
+	// Seed three balances so the tests below have something to enumerate.
+	// Two accounts with two distinct denoms apiece — enough to exercise both
+	// the all-accounts and filtered code paths (PLAN B2-4).
+	require.NoError(t, balanceStore.Set(ctx, "alice", "stake", 100))
+	require.NoError(t, balanceStore.Set(ctx, "alice", "atom", 250))
+	require.NoError(t, balanceStore.Set(ctx, "bob", "stake", 50))
+
+	t.Run("returns all balances for a specific account", func(t *testing.T) {
 		result, err := mod.handleQueryAllBalances(ctx, []byte("alice"), 0)
 		require.NoError(t, err)
-		assert.Contains(t, string(result), "alice")
-		assert.Contains(t, string(result), "iteration support")
+
+		var resp AllBalancesResponse
+		require.NoError(t, json.Unmarshal(result, &resp))
+		assert.Equal(t, "alice", resp.Account)
+		require.Len(t, resp.Balances, 2)
+		// Sorted by "account/denom" key — alice/atom comes before alice/stake.
+		assert.Equal(t, "atom", resp.Balances[0].Denom)
+		assert.Equal(t, uint64(250), resp.Balances[0].Amount)
+		assert.Equal(t, "stake", resp.Balances[1].Denom)
+		assert.Equal(t, uint64(100), resp.Balances[1].Amount)
 	})
 
-	t.Run("fails with invalid account name", func(t *testing.T) {
-		_, err := mod.handleQueryAllBalances(ctx, []byte(""), 0)
-		assert.Error(t, err)
+	t.Run("returns balances across every account when data is empty", func(t *testing.T) {
+		result, err := mod.handleQueryAllBalances(ctx, nil, 0)
+		require.NoError(t, err)
+
+		var resp AllBalancesResponse
+		require.NoError(t, json.Unmarshal(result, &resp))
+		assert.Equal(t, "", resp.Account)
+		require.Len(t, resp.Balances, 3)
+		// Deterministic ascending order on "account/denom".
+		assert.Equal(t, "alice", resp.Balances[0].Account)
+		assert.Equal(t, "atom", resp.Balances[0].Denom)
+		assert.Equal(t, "alice", resp.Balances[1].Account)
+		assert.Equal(t, "stake", resp.Balances[1].Denom)
+		assert.Equal(t, "bob", resp.Balances[2].Account)
+		assert.Equal(t, "stake", resp.Balances[2].Denom)
+	})
+
+	t.Run("rejects an invalid (non-empty) account name", func(t *testing.T) {
+		_, err := mod.handleQueryAllBalances(ctx, []byte("INVALID NAME WITH SPACE"), 0)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid account name")
 	})
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/blockberries/punnet-sdk/effects"
 	"github.com/blockberries/punnet-sdk/runtime"
@@ -194,12 +196,26 @@ func (m *BAPIBankModule) handleMultiSend(ctx context.Context, txCtx *runtime.BAP
 		}
 	}
 
+	// Sort recipient account names so the effect order is deterministic.
+	// Iterating outputNeeds directly used Go map order, which differs run-to-run
+	// and produces different effect lists on different validators for the same
+	// MsgMultiSend — a consensus split (PLAN T1-7). Snapshotting the keys once
+	// (instead of inside the inner loop) is sufficient: every iteration of the
+	// outer loop sees the same key ordering even as the inner loop mutates
+	// `outputNeeds[acct][coin.Denom]`.
+	sortedRecipients := make([]string, 0, len(outputNeeds))
+	for acct := range outputNeeds {
+		sortedRecipients = append(sortedRecipients, acct)
+	}
+	sort.Strings(sortedRecipients)
+
 	// Create transfers from inputs to outputs
 	for _, input := range multiSendMsg.Inputs {
 		for _, coin := range input.Coins {
 			// Find outputs that need this denomination and transfer to them
 			remaining := coin.Amount
-			for acct, denoms := range outputNeeds {
+			for _, acct := range sortedRecipients {
+				denoms := outputNeeds[acct]
 				if needed, ok := denoms[coin.Denom]; ok && needed > 0 {
 					// Transfer what we can
 					toTransfer := remaining
@@ -279,28 +295,82 @@ func (m *BAPIBankModule) handleQueryBalance(ctx context.Context, data []byte, he
 	return json.Marshal(balance)
 }
 
-// handleQueryAllBalances handles all balances queries.
-// Note: This is a simplified implementation that only returns a single balance.
-// A full implementation would require iteration support in the store.
+// AllBalancesResponse is the JSON response shape for /bank/all_balances. It is
+// exported so external callers (e.g. RPC tests, integration suites) can decode
+// the response without re-deriving the format. PLAN B2-4.
+type AllBalancesResponse struct {
+	Account  string         `json:"account"`
+	Balances []GenesisBalance `json:"balances"`
+}
+
+// handleQueryAllBalances returns every denom balance for the requested
+// account. It uses the in-memory key index maintained by BAPIBalanceStore
+// (TrackedKeys) to enumerate all "<account>/<denom>" keys under the balances
+// prefix, then filters to the requested account. PLAN B2-4 replaces the prior
+// placeholder which returned a hard-coded note explaining iteration was not
+// supported.
+//
+// Empty `data` means "list balances for every known account" — useful for
+// genesis export and tests. A non-empty `data` is interpreted as an account
+// name (matching the prior contract) and only balances belonging to that
+// account are returned.
 func (m *BAPIBankModule) handleQueryAllBalances(ctx context.Context, data []byte, height int64) ([]byte, error) {
 	if m == nil || m.balanceStore == nil {
 		return nil, fmt.Errorf("module or store is nil")
 	}
 
-	// For now, treat data as account name
-	account := types.AccountName(data)
-	if !account.IsValid() {
-		return nil, fmt.Errorf("%w: invalid account name", types.ErrInvalidAccount)
+	var filterAccount types.AccountName
+	if len(data) > 0 {
+		filterAccount = types.AccountName(data)
+		if !filterAccount.IsValid() {
+			return nil, fmt.Errorf("%w: invalid account name", types.ErrInvalidAccount)
+		}
 	}
 
-	// Note: Without iteration support, we can't list all balances.
-	// Return a placeholder response indicating this limitation.
-	response := map[string]interface{}{
-		"account": string(account),
-		"note":    "all_balances query requires iteration support (not yet implemented)",
+	// TrackedKeys is pre-sorted, so the response is deterministic.
+	keys := m.balanceStore.TrackedKeys()
+	balances := make([]GenesisBalance, 0, len(keys))
+
+	for _, k := range keys {
+		// Keys are formatted as "account/denom" by balanceKey().
+		account, denom, ok := splitBalanceKey(k)
+		if !ok {
+			continue
+		}
+		if filterAccount != "" && types.AccountName(account) != filterAccount {
+			continue
+		}
+		amount, err := m.balanceStore.GetAmount(ctx, account, denom)
+		if err != nil {
+			return nil, fmt.Errorf("get balance %s/%s: %w", account, denom, err)
+		}
+		// Skip zero balances — the tracker may retain a key whose row was
+		// rewritten to 0 by SubAmount. This matches the existing zero-
+		// balance semantics in BAPIBalanceStore.Get.
+		if amount == 0 {
+			continue
+		}
+		balances = append(balances, GenesisBalance{
+			Account: account,
+			Denom:   denom,
+			Amount:  amount,
+		})
 	}
 
-	return json.Marshal(response)
+	return json.Marshal(AllBalancesResponse{
+		Account:  string(filterAccount),
+		Balances: balances,
+	})
+}
+
+// splitBalanceKey reverses balanceKey: it splits "account/denom" on the first
+// '/'. Returns the account, denom, and a success flag.
+func splitBalanceKey(k string) (string, string, bool) {
+	idx := strings.IndexByte(k, '/')
+	if idx <= 0 || idx == len(k)-1 {
+		return "", "", false
+	}
+	return k[:idx], k[idx+1:], true
 }
 
 // Verify interface compliance at compile time.
