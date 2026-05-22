@@ -113,7 +113,7 @@ func TestEndBlock_CreditsValidatorOnEpochClose(t *testing.T) {
 	require.NotNil(t, vd)
 	expectedCommission := (emissionPool + priorityPool) * uint64(commissionBps) / 10000
 	assert.Equal(t, expectedCommission, vd.OutstandingCommissionMicro)
-	require.NotEmpty(t, vd.RewardPerShareScaled, "R_v should be advanced")
+	require.NotEmpty(t, vd.CumulativeRewardRatioScaled, "CRR should be advanced after epoch close")
 }
 
 // TestClaimFlow_BasicHappyPath: an end-to-end "delegate → epoch

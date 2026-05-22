@@ -64,39 +64,92 @@ const (
 	PriorityPoolAccount = "module.pp"
 )
 
-// ValidatorDistribution is the per-validator F1 state.
+// ValidatorDistribution is the per-validator F1 state. Phase 3.6
+// expansion: per-period historical snapshots now live in
+// ValidatorHistoricalRewards (keyed by period). The fields here
+// track only the IN-PROGRESS period: CurrentRewardsScaled is the
+// reward accumulator that the next IncrementPeriod folds into the
+// cumulative ratio.
 //
-// - RewardPerShareScaled: cumulative R_v × 10^18, encoded as
-//   big-endian bytes. Stored as bytes so we can use math/big
-//   internally without bumping the on-disk schema each time the
-//   encoding format changes.
-// - OutstandingCommissionMicro: micro-tokens of commission accrued
-//   since the validator last claimed.
-// - CurrentPeriod: monotonically incremented at slash events
-//   (Phase 3.6). Currently always 0 — slash-period snapshot logic
-//   not yet wired.
-// - TotalStakeMicro: validator's TotalDelegation at last update.
-//   Cached here so per-block credit math doesn't reach into the
-//   staking module store.
+// At period boundaries, IncrementValidatorPeriod:
+//   1. Computes delta_CRR = CurrentRewardsScaled / TotalStakeMicro
+//      (both stored as 10^18-scaled values)
+//   2. cumulative_new = cumulative_prev + delta_CRR
+//   3. Stores historical[period] = cumulative_new (snapshot
+//      AFTER this period's credit)
+//   4. Resets CurrentRewardsScaled to 0
+//   5. Increments CurrentPeriod
+//
+// Delegators reference the snapshot at the END of their joined
+// period; the difference snapshot[end] − snapshot[start] gives
+// the per-share rewards earned over that span.
 type ValidatorDistribution struct {
-	RewardPerShareScaled       []byte `cramberry:"1" json:"reward_per_share_scaled"`
-	OutstandingCommissionMicro uint64 `cramberry:"2" json:"outstanding_commission_micro"`
-	CurrentPeriod              uint64 `cramberry:"3" json:"current_period"`
-	TotalStakeMicro            uint64 `cramberry:"4" json:"total_stake_micro"`
+	// CumulativeRewardRatioScaled: cumulative R_v × 10^18, before
+	// folding in CurrentRewardsScaled. Updated at every
+	// IncrementValidatorPeriod.
+	CumulativeRewardRatioScaled []byte `cramberry:"1" json:"cumulative_reward_ratio_scaled"`
+
+	// CurrentRewardsScaled: the in-progress period's accumulator
+	// scaled by 10^18. Credit at epoch close adds to this; the
+	// next IncrementPeriod folds it into the CRR and resets.
+	CurrentRewardsScaled []byte `cramberry:"2" json:"current_rewards_scaled"`
+
+	// OutstandingCommissionMicro: micro-tokens of commission
+	// accrued since the validator last claimed.
+	OutstandingCommissionMicro uint64 `cramberry:"3" json:"outstanding_commission_micro"`
+
+	// CurrentPeriod: monotonically incremented at every state
+	// change that ends a period (epoch credit, slash, delegate,
+	// claim). Slash events reference the period that's ending
+	// when the slash fires.
+	CurrentPeriod uint64 `cramberry:"4" json:"current_period"`
+
+	// TotalStakeMicro: validator's TotalDelegation at last update.
+	// Refreshed by IncrementValidatorPeriod and by claim handlers
+	// when they call out to staking.
+	TotalStakeMicro uint64 `cramberry:"5" json:"total_stake_micro"`
+}
+
+// ValidatorHistoricalRewards is the per-period snapshot of the
+// validator's cumulative reward-per-share ratio at the END of
+// that period. Stored under "validator/<hex>/history/<period>".
+// Phase 3.6.
+//
+// In cosmos-sdk x/distribution, each entry also carries a
+// reference count for GC; this v1 omits the GC pass and lets
+// entries accumulate. Bounded by lifetime period-count per
+// validator — acceptable at v1 scales.
+type ValidatorHistoricalRewards struct {
+	CumulativeRewardRatioScaled []byte `cramberry:"1" json:"cumulative_reward_ratio_scaled"`
+}
+
+// ValidatorSlashEvent is recorded by RecordSlash at the moment a
+// validator is slashed. Stored under "validator/<hex>/slash/<period>".
+// The Period is the period that's ENDING due to this slash —
+// the snapshot at this period reflects pre-slash stake.
+//
+// FractionBps is the slash severity (e.g. 500 = 5% per spec §9).
+// On claim, the delegator's stake is reduced by this fraction
+// when walking past the corresponding period boundary.
+type ValidatorSlashEvent struct {
+	Period      uint64 `cramberry:"1" json:"period"`
+	Height      uint64 `cramberry:"2" json:"height"`
+	FractionBps uint64 `cramberry:"3" json:"fraction_bps"`
 }
 
 // DelegatorReward is the per-(delegator, validator) F1 state.
 //
-// - StakeMicro: the delegator's stake on the validator at the last
-//   index-snapshot time. Updated on delegate / undelegate / claim.
-// - StartIndexScaled: R_v at the moment of the last snapshot. The
-//   unclaimed reward is stake × (current R_v − StartIndex).
-// - StartPeriod: the validator's CurrentPeriod when the snapshot
-//   was taken. Phase 3.6 will use this for slash-period walking.
+// - StakeMicro: the delegator's stake at the time of the last
+//   delegation-modify or claim. Used as the "stake at start of
+//   walk" by the claim algorithm; slash factors reduce this as
+//   the walk crosses slash boundaries.
+// - PreviousPeriod: the validator's CurrentPeriod when the
+//   delegator's stake was last snapshot. Claim walks from
+//   PreviousPeriod to current, applying slash events along the
+//   way.
 type DelegatorReward struct {
-	StakeMicro       uint64 `cramberry:"1" json:"stake_micro"`
-	StartIndexScaled []byte `cramberry:"2" json:"start_index_scaled"`
-	StartPeriod      uint64 `cramberry:"3" json:"start_period"`
+	StakeMicro     uint64 `cramberry:"1" json:"stake_micro"`
+	PreviousPeriod uint64 `cramberry:"2" json:"previous_period"`
 }
 
 // DistributionParams is the persisted module parameters. Currently

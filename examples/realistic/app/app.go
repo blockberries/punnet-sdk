@@ -95,6 +95,12 @@ func Build() (*Realistic, error) {
 	if err := govMod.RegisterParameterTarget("fees", feesMod); err != nil {
 		return nil, fmt.Errorf("register fees as gov target: %w", err)
 	}
+
+	// Phase 3.6 wiring: distribution registers as a slash
+	// observer so it can end the validator's period before the
+	// slash applies. Without this, F1 reward math underpays
+	// pre-slash delegators.
+	stakingMod.RegisterSlashObserver(distMod)
 	if err := govMod.Parameters.Register(governance.ParameterBand{
 		Name:    "byte_fee",
 		SoftMin: 0, SoftMax: 100,

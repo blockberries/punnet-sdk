@@ -45,6 +45,39 @@ type BAPIStakingModule struct {
 	// Phase 2.8's validator-register bond computation. Zero when
 	// the chain does not enforce a fixed supply (test-only setups).
 	totalSupply uint64
+
+	// slashObservers receive a notification BEFORE each slash is
+	// applied. The distribution module (Phase 3.6) registers as an
+	// observer to end the validator's current period and record
+	// the slash event at the just-ended period — without that
+	// hook, the F1 reward math overpays/underpays delegators
+	// who delegated before the slash.
+	//
+	// Observer notifications fire even when the validator is
+	// already jailed or tombstoned (the distribution side cares
+	// about the period boundary, not the final validator status).
+	slashObservers []SlashObserver
+}
+
+// SlashObserver is the optional hook for modules that need to
+// react to a validator slash BEFORE the actual stake reduction is
+// applied. The distribution module is the canonical consumer;
+// future modules (e.g. an analytics aggregator) can attach too.
+//
+// PLAN §7 Phase 3.6 — mirrors cosmos-sdk x/staking's
+// BeforeValidatorSlashed hook.
+type SlashObserver interface {
+	RecordSlash(ctx context.Context, validatorPubKey []byte, height, fractionBps uint64) error
+}
+
+// RegisterSlashObserver appends an observer to the pre-slash
+// notification chain. App wiring calls this at module
+// construction time (typically `stakingMod.RegisterSlashObserver(distMod)`).
+func (m *BAPIStakingModule) RegisterSlashObserver(obs SlashObserver) {
+	if obs == nil {
+		return
+	}
+	m.slashObservers = append(m.slashObservers, obs)
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -260,6 +293,18 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 				"pub_key": []byte(hex.EncodeToString(evidence.PubKey.Data)),
 			}),
 		}, nil
+	}
+
+	// Phase 3.6: notify slash observers BEFORE applying the slash.
+	// The distribution module uses this to end the validator's
+	// current period and record the slash event at the
+	// just-ended period — required for the F1 reward walk on
+	// claim to correctly attribute pre-slash rewards to
+	// pre-slash stake (cosmos-sdk x/distribution algebra).
+	for _, obs := range m.slashObservers {
+		if err := obs.RecordSlash(ctx, evidence.PubKey.Data, uint64(blockCtx.Height), slashBps); err != nil {
+			return nil, fmt.Errorf("slash observer: %w", err)
+		}
 	}
 
 	// Phase 2.6: slash from the entire TotalDelegation, not just
