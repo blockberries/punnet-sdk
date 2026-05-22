@@ -98,7 +98,7 @@ func (m *AuthModule) handleCreateAccount(ctx *runtime.Context, msg types.Message
 
 	// Return write effect for the account
 	return []effects.Effect{
-		effects.WriteEffect[*types.Account]{
+		&effects.WriteEffect[*types.Account]{
 			Store:    "account",
 			StoreKey: []byte(createMsg.Name),
 			Value:    account,
@@ -146,7 +146,7 @@ func (m *AuthModule) handleUpdateAuthority(ctx *runtime.Context, msg types.Messa
 
 	// Return write effect for the updated account
 	return []effects.Effect{
-		effects.WriteEffect[*types.Account]{
+		&effects.WriteEffect[*types.Account]{
 			Store:    "account",
 			StoreKey: []byte(updateMsg.Name),
 			Value:    account,

@@ -97,7 +97,7 @@ func (m *StakingModule) handleCreateValidator(ctx *runtime.Context, msg types.Me
 
 	// Return write effect for the validator
 	return []effects.Effect{
-		effects.WriteEffect[store.Validator]{
+		&effects.WriteEffect[store.Validator]{
 			Store:    "validator",
 			StoreKey: createMsg.PubKey,
 			Value:    validator,
@@ -177,7 +177,7 @@ func (m *StakingModule) handleDelegate(ctx *runtime.Context, msg types.Message) 
 			Amount: types.Coins{delegateMsg.Amount},
 		},
 		// Record the delegation
-		effects.WriteEffect[store.Delegation]{
+		&effects.WriteEffect[store.Delegation]{
 			Store:    "delegation",
 			StoreKey: store.DelegationKey(delegateMsg.Delegator, delegateMsg.Validator),
 			Value:    delegation,
@@ -243,7 +243,7 @@ func (m *StakingModule) handleUndelegate(ctx *runtime.Context, msg types.Message
 	} else {
 		// Update delegation with reduced shares
 		delegation.Shares -= undelegateMsg.Amount.Amount
-		delegationEffect = effects.WriteEffect[store.Delegation]{
+		delegationEffect = &effects.WriteEffect[store.Delegation]{
 			Store:    "delegation",
 			StoreKey: store.DelegationKey(undelegateMsg.Delegator, undelegateMsg.Validator),
 			Value:    delegation,

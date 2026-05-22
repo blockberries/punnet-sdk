@@ -97,11 +97,15 @@ func (e *BAPIExecutor) executeWrite(ctx context.Context, effect Effect) error {
 	if rawWrite, ok := effect.(RawWriteEffect); ok {
 		value = rawWrite.SerializedValue()
 	} else if valueWriter, ok := effect.(ValueWriter); ok {
-		// Check if it implements ValueWriter interface
 		value = valueWriter.SerializedValue()
+	} else if serializer, ok := effect.(WriteEffectSerializer); ok {
+		// WriteEffect[T] uses pointer receiver for SerializedValue() ([]byte, error)
+		var err error
+		value, err = serializer.SerializedValue()
+		if err != nil {
+			return fmt.Errorf("serialize write effect: %w", err)
+		}
 	} else {
-		// For generic WriteEffect[T], we need to serialize
-		// For now, we'll use a placeholder - the typed stores handle serialization
 		return fmt.Errorf("write effect does not provide serialized value")
 	}
 
@@ -109,8 +113,14 @@ func (e *BAPIExecutor) executeWrite(ctx context.Context, effect Effect) error {
 		return fmt.Errorf("write effect has nil value")
 	}
 
-	// Write to the raw state store
-	return e.storeProvider.StateStore().Set(key, value)
+	// Write to the raw state store.
+	if err := e.storeProvider.StateStore().Set(key, value); err != nil {
+		return err
+	}
+	// Best-effort notify the typed stores so their in-memory key indices
+	// (PLAN B2-4 / B2-5) reflect the write. Unknown key prefixes are no-ops.
+	e.storeProvider.NotifyRawWrite(key)
+	return nil
 }
 
 // executeDelete executes a delete effect.
@@ -120,7 +130,11 @@ func (e *BAPIExecutor) executeDelete(ctx context.Context, effect Effect) error {
 		return fmt.Errorf("delete effect has empty key")
 	}
 
-	return e.storeProvider.StateStore().Delete(key)
+	if err := e.storeProvider.StateStore().Delete(key); err != nil {
+		return err
+	}
+	e.storeProvider.NotifyRawDelete(key)
+	return nil
 }
 
 // executeTransfer executes a transfer effect.

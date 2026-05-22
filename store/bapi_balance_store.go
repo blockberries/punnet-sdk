@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 
 	"github.com/blockberries/blockberry/pkg/statestore"
 )
@@ -16,15 +18,122 @@ type BAPIBalance struct {
 
 // BAPIBalanceStore provides typed access to balance data.
 // Keys are formatted as "account/denom" for efficient range queries.
+//
+// The store also maintains an in-memory key index (PLAN B2-4) so callers can
+// enumerate balances without iterating the underlying merkle store. The
+// index is populated by Set/Delete and by the effect executor
+// (NotifyBalanceWrite); on the first TrackedKeys call after process
+// startup it is also rebuilt from the underlying StateStore's Iterate
+// hook if available (closes the post-restart empty-list gap).
 type BAPIBalanceStore struct {
 	*TypedStore[*BAPIBalance]
+
+	mu      sync.RWMutex
+	keySet  map[string]struct{}
+	rebuilt bool
 }
 
 // NewBAPIBalanceStore creates a new balance store backed by blockberry's StateStore.
 func NewBAPIBalanceStore(store statestore.StateStore) *BAPIBalanceStore {
 	return &BAPIBalanceStore{
 		TypedStore: NewTypedStore[*BAPIBalance](store, "balances/"),
+		keySet:     make(map[string]struct{}),
 	}
+}
+
+// TrackKey records `key` (relative to the store's prefix, e.g. "alice/stake")
+// in the in-memory index. Called by Set and by the effect executor (via
+// BAPIStoreProvider.NotifyBalanceWrite) so writes that bypass Set are still
+// visible to TrackedKeys / handleQueryAllBalances.
+//
+// The index is not persisted; if the process restarts and nobody re-seeds it,
+// TrackedKeys will return an empty list until balances are touched again.
+// Genesis InitGenesis paths re-seed the index because they call Set directly.
+func (s *BAPIBalanceStore) TrackKey(key string) {
+	if s == nil || key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keySet[key] = struct{}{}
+}
+
+// UntrackKey removes `key` from the in-memory index. Called by Delete and by
+// the effect executor when a delete effect targets a balance row.
+func (s *BAPIBalanceStore) UntrackKey(key string) {
+	if s == nil || key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.keySet, key)
+}
+
+// TrackedKeys returns the sorted list of known "account/denom" keys that
+// have been written through this store instance. Sorted output is
+// required for deterministic query results.
+//
+// On the first call after process startup, if the underlying StateStore
+// supports iteration, rebuilds the index from a prefix scan so balances
+// written before the previous shutdown become enumerable without needing
+// to be touched again.
+func (s *BAPIBalanceStore) TrackedKeys() []string {
+	if s == nil {
+		return nil
+	}
+	s.ensureRebuilt()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.keySet))
+	for k := range s.keySet {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ResetIndex clears the in-memory key index and arms the next TrackedKeys
+// call to rebuild it from the underlying StateStore. Used by state-sync
+// after the StateStore has been wholesale replaced by a snapshot import —
+// without this, the cached keySet would still reflect the pre-import
+// world. Safe to call concurrently with reads and writes.
+func (s *BAPIBalanceStore) ResetIndex() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keySet = make(map[string]struct{})
+	s.rebuilt = false
+}
+
+// ensureRebuilt performs the one-shot lazy index rebuild from the
+// underlying iterable store. Safe to call concurrently and repeatedly.
+func (s *BAPIBalanceStore) ensureRebuilt() {
+	s.mu.Lock()
+	if s.rebuilt {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	keys := make([]string, 0, 64)
+	err := s.TypedStore.IterateRelative(func(relKey string, _ *BAPIBalance) bool {
+		keys = append(keys, relKey)
+		return false
+	})
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rebuilt {
+		return
+	}
+	if err == nil {
+		for _, k := range keys {
+			s.keySet[k] = struct{}{}
+		}
+	}
+	s.rebuilt = true
 }
 
 // balanceKey creates the key for an account/denom pair.
@@ -66,7 +175,11 @@ func (s *BAPIBalanceStore) Set(ctx context.Context, account, denom string, amoun
 		Denom:   denom,
 		Amount:  amount,
 	}
-	return s.TypedStore.Set(ctx, balanceKey(account, denom), balance)
+	if err := s.TypedStore.Set(ctx, balanceKey(account, denom), balance); err != nil {
+		return err
+	}
+	s.TrackKey(balanceKey(account, denom))
+	return nil
 }
 
 // Delete removes a balance.
@@ -77,7 +190,11 @@ func (s *BAPIBalanceStore) Delete(ctx context.Context, account, denom string) er
 	if denom == "" {
 		return fmt.Errorf("empty denom")
 	}
-	return s.TypedStore.Delete(ctx, balanceKey(account, denom))
+	if err := s.TypedStore.Delete(ctx, balanceKey(account, denom)); err != nil {
+		return err
+	}
+	s.UntrackKey(balanceKey(account, denom))
+	return nil
 }
 
 // GetAmount retrieves just the amount for an account/denom pair.

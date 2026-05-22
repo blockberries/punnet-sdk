@@ -71,6 +71,57 @@ func (p *BAPIStoreProvider) GetParamsStore() *BAPIParamsStore {
 	return p.paramsStore
 }
 
+// NotifyRawWrite is called by the effect executor after a raw state-store
+// write so the typed stores can update their in-memory key indices. The
+// `fullKey` is the raw state-store key — i.e. it includes the typed store's
+// prefix (e.g. "accounts/alice", "balances/alice/stake"). Unknown prefixes
+// are silently ignored, which makes the call safe to invoke from a generic
+// write path.
+//
+// This is the bridge between the effect executor (which writes raw bytes
+// for cramberry-serialized WriteEffect[T] values, bypassing the typed
+// stores) and the typed stores that own the in-memory iteration index.
+func (p *BAPIStoreProvider) NotifyRawWrite(fullKey []byte) {
+	if p == nil || len(fullKey) == 0 {
+		return
+	}
+	if rel, ok := stripPrefix(fullKey, "accounts/"); ok {
+		p.accountStore.TrackKey(rel)
+		return
+	}
+	if rel, ok := stripPrefix(fullKey, "balances/"); ok {
+		p.balanceStore.TrackKey(rel)
+		return
+	}
+}
+
+// NotifyRawDelete is the delete-side counterpart to NotifyRawWrite.
+func (p *BAPIStoreProvider) NotifyRawDelete(fullKey []byte) {
+	if p == nil || len(fullKey) == 0 {
+		return
+	}
+	if rel, ok := stripPrefix(fullKey, "accounts/"); ok {
+		p.accountStore.UntrackKey(rel)
+		return
+	}
+	if rel, ok := stripPrefix(fullKey, "balances/"); ok {
+		p.balanceStore.UntrackKey(rel)
+		return
+	}
+}
+
+// stripPrefix returns the suffix of `key` after `prefix` if `key` starts with
+// `prefix`, and reports false otherwise.
+func stripPrefix(key []byte, prefix string) (string, bool) {
+	if len(key) < len(prefix) {
+		return "", false
+	}
+	if string(key[:len(prefix)]) != prefix {
+		return "", false
+	}
+	return string(key[len(prefix):]), true
+}
+
 // Verify BAPIStoreProvider implements the DI interfaces.
 var _ di.StateStoreProvider = (*BAPIStoreProvider)(nil)
 var _ di.AccountStoreProvider = (*BAPIStoreProvider)(nil)
