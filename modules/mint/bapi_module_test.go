@@ -9,7 +9,6 @@ import (
 	"github.com/blockberries/punnet-sdk/effects"
 	"github.com/blockberries/punnet-sdk/runtime"
 	"github.com/blockberries/punnet-sdk/store"
-	ptypes "github.com/blockberries/punnet-sdk/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,12 +76,14 @@ func TestComputeEmission_ZeroSupplyZeroes(t *testing.T) {
 		computeEmission(DefaultRhoScaled, 0, 1_000_000, 1_000_000))
 }
 
-// TestEndBlock_EmitsTransferFromVRP exercises the full EndBlock
-// path: seed VRP, run EndBlock, verify the returned effect is a
-// VRP → Emission Pool transfer of the expected amount.
-func TestEndBlock_EmitsTransferFromVRP(t *testing.T) {
+// TestEndBlock_TransfersFromVRPDirectly exercises the EndBlock
+// path: seed VRP, run EndBlock, verify the balance moved from
+// VRP to the Emission Pool. The transfer is applied directly
+// (not returned as an effect) so distribution's same-block read
+// sees post-emission state. PLAN §7 Phase 3.7.
+func TestEndBlock_TransfersFromVRPDirectly(t *testing.T) {
 	const totalSupply uint64 = 1_000_000_000_000_000
-	mod, bs, exec, ctx := newMintFixture(t, totalSupply)
+	mod, bs, _, ctx := newMintFixture(t, totalSupply)
 
 	// Seed protocol accounts as the runtime would post-Phase 0.6.
 	// VRP > V_threshold so taper = 1.
@@ -90,38 +91,30 @@ func TestEndBlock_EmitsTransferFromVRP(t *testing.T) {
 	require.NoError(t, bs.Set(ctx, CTAccount, "stake", totalSupply*3/10))
 	require.NoError(t, bs.Set(ctx, EcosystemAccount, "stake", totalSupply/10))
 	require.NoError(t, bs.Set(ctx, BootstrapAccount, "stake", totalSupply/20))
-	// Remaining (25% airdrop) sits in airdrop accounts; CS includes it.
 
 	effs, _, err := mod.EndBlock(ctx, &runtime.BAPIBlockContext{Height: 1})
 	require.NoError(t, err)
-	require.Len(t, effs, 1, "EndBlock should emit exactly one transfer")
-
-	tr, ok := effs[0].(effects.TransferEffect)
-	require.True(t, ok, "effect must be TransferEffect")
-	assert.Equal(t, ptypes.AccountName(VRPAccount), tr.From)
-	assert.Equal(t, ptypes.AccountName(EmissionPoolAccount), tr.To)
-	require.Len(t, tr.Amount, 1)
-	assert.Greater(t, tr.Amount[0].Amount, uint64(0))
-
-	// Execute the effect and confirm balances moved.
-	_, err = exec.Execute(effs)
-	require.NoError(t, err)
+	assert.Empty(t, effs, "mint applies the transfer directly; no effects returned")
 
 	vrpPost, _ := bs.GetAmount(ctx, VRPAccount, "stake")
 	emPost, _ := bs.GetAmount(ctx, EmissionPoolAccount, "stake")
-	assert.Equal(t, totalSupply/4-tr.Amount[0].Amount, vrpPost)
-	assert.Equal(t, tr.Amount[0].Amount, emPost)
+	assert.Less(t, vrpPost, totalSupply/4, "VRP should have been debited")
+	assert.Greater(t, emPost, uint64(0), "Emission Pool should have been credited")
+	assert.Equal(t, totalSupply/4-emPost, vrpPost,
+		"VRP debit equals Emission Pool credit (supply conservation)")
 }
 
 // TestEndBlock_NoEmissionWhenVRPEmpty: the post-VRP-exhaustion
-// endgame. EndBlock returns nil effects when VRP is zero (or below
-// the integer-truncation floor).
+// endgame. EndBlock returns cleanly without transferring when VRP
+// is zero (or below the integer-truncation floor).
 func TestEndBlock_NoEmissionWhenVRPEmpty(t *testing.T) {
-	mod, _, _, ctx := newMintFixture(t, 1_000_000_000_000_000)
+	mod, bs, _, ctx := newMintFixture(t, 1_000_000_000_000_000)
 
 	effs, _, err := mod.EndBlock(ctx, &runtime.BAPIBlockContext{Height: 1})
 	require.NoError(t, err)
-	assert.Empty(t, effs, "empty VRP → no emission effect")
+	assert.Empty(t, effs)
+	emPost, _ := bs.GetAmount(ctx, EmissionPoolAccount, "stake")
+	assert.Equal(t, uint64(0), emPost, "empty VRP → no credit")
 }
 
 // TestEndBlock_SaturatesToVRP: when the computed B_t would exceed
@@ -134,17 +127,10 @@ func TestEndBlock_SaturatesToVRP(t *testing.T) {
 	// VRP very small, well below where the taper goes to zero —
 	// at this scale B_t computed naively might be larger than VRP.
 	require.NoError(t, bs.Set(ctx, VRPAccount, "stake", 100))
-	effs, _, err := mod.EndBlock(ctx, &runtime.BAPIBlockContext{Height: 1})
+	_, _, err := mod.EndBlock(ctx, &runtime.BAPIBlockContext{Height: 1})
 	require.NoError(t, err)
-	if len(effs) == 0 {
-		// At extreme tail, B_t may round to zero. Either zero or
-		// saturated-to-100 is acceptable; both preserve invariants.
-		return
-	}
-	require.Len(t, effs, 1)
-	tr := effs[0].(effects.TransferEffect)
-	assert.LessOrEqual(t, tr.Amount[0].Amount, uint64(100),
-		"transfer must not exceed VRP balance")
+	emPost, _ := bs.GetAmount(ctx, EmissionPoolAccount, "stake")
+	assert.LessOrEqual(t, emPost, uint64(100), "emission must not exceed VRP balance")
 }
 
 // TestGenesisRoundTrip pins the InitGenesis/ExportGenesis pair:

@@ -10,7 +10,6 @@ import (
 	"github.com/blockberries/punnet-sdk/effects"
 	"github.com/blockberries/punnet-sdk/runtime"
 	"github.com/blockberries/punnet-sdk/store"
-	ptypes "github.com/blockberries/punnet-sdk/types"
 )
 
 // keyParams is the typed-store key for the persisted MintParams.
@@ -174,13 +173,19 @@ func (m *BAPIMintModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPIBlo
 		return nil, nil, nil
 	}
 
-	return []effects.Effect{
-		effects.TransferEffect{
-			From:   ptypes.AccountName(VRPAccount),
-			To:     ptypes.AccountName(EmissionPoolAccount),
-			Amount: ptypes.NewCoins(ptypes.NewCoin(StakingDenom, bMicro)),
-		},
-	}, nil, nil
+	// Apply the transfer directly to the balance store rather than
+	// returning a TransferEffect. The distribution module's EndBlock
+	// reads EmissionPoolAccount at the same epoch-close height —
+	// returning an effect (which the runtime would only execute after
+	// every module's EndBlock has run) would leave distribution
+	// reading a stale EmissionPool balance. Bookkeeping operations
+	// (emission schedule, participation counters, validator-set
+	// refresh snapshot) bypass the effects pipeline so downstream
+	// consumers see settled state. PLAN §7 Phase 3.7.
+	if err := m.balanceStore.Transfer(ctx, VRPAccount, EmissionPoolAccount, StakingDenom, bMicro); err != nil {
+		return nil, nil, fmt.Errorf("emit B_t: %w", err)
+	}
+	return nil, nil, nil
 }
 
 // computeEmission is the spec §4.1 formula:
