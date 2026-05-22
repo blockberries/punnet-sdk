@@ -166,7 +166,7 @@ func (a *BAPIApplication) Handshake(ctx context.Context, req types.HandshakeRequ
 		return types.HandshakeResponse{
 			LastBlock:    nil,
 			AppHash:      &a.appHash,
-			Capabilities: 0, // Lifecycle only for now
+			Capabilities: types.CapMempoolObserver, // PLAN §7 Phase 3.3
 		}, nil
 	}
 
@@ -192,7 +192,7 @@ func (a *BAPIApplication) Handshake(ctx context.Context, req types.HandshakeRequ
 			return types.HandshakeResponse{
 				LastBlock:    nil,
 				AppHash:      &a.appHash,
-				Capabilities: 0,
+				Capabilities: types.CapMempoolObserver,
 			}, nil
 		}
 		return types.HandshakeResponse{}, fmt.Errorf(
@@ -212,7 +212,7 @@ func (a *BAPIApplication) Handshake(ctx context.Context, req types.HandshakeRequ
 			Hash:   blockHash,
 		},
 		AppHash:      &a.appHash,
-		Capabilities: 0,
+		Capabilities: types.CapMempoolObserver,
 	}, nil
 }
 
@@ -1316,6 +1316,52 @@ type BAPIGenesisState struct {
 	// (bank, mint, distribution, staking) consult these values
 	// via BAPIApplication.TokenomicsGenesis().
 	Tokenomics *TokenomicsGenesis `json:"tokenomics,omitempty"`
+}
+
+// OnBatchCertified implements bapi.MempoolObserver. Fans the event
+// out to every module that implements BAPIMempoolObserver. The first
+// module to return an error wins; subsequent modules are skipped.
+//
+// Determinism note: the participation tracker is the only consumer
+// in v1. Counter updates are written directly to the state store
+// outside the ExecuteBlock effect pipeline. The BAPI server
+// serializes lifecycle calls, so writes from OnBatchCertified
+// interleave with — but never overlap — writes from ExecuteBlock.
+// Deterministic delivery of OnBatchCertified events across
+// validators is the consensus layer's responsibility (raspberry +
+// looseberry); PLAN §7 Phase 3.8.
+func (a *BAPIApplication) OnBatchCertified(ctx context.Context, ev types.BatchCertifiedEvent) error {
+	if a == nil || a.router == nil {
+		return nil
+	}
+	for _, mod := range a.router.Modules() {
+		observer, ok := mod.(BAPIMempoolObserver)
+		if !ok {
+			continue
+		}
+		if err := observer.OnBatchCertified(ctx, ev); err != nil {
+			return fmt.Errorf("module %s OnBatchCertified: %w", mod.Name(), err)
+		}
+	}
+	return nil
+}
+
+// OnBlockConstructed implements bapi.MempoolObserver. Symmetric to
+// OnBatchCertified — fans out to every BAPIMempoolObserver module.
+func (a *BAPIApplication) OnBlockConstructed(ctx context.Context, ev types.BlockConstructedEvent) error {
+	if a == nil || a.router == nil {
+		return nil
+	}
+	for _, mod := range a.router.Modules() {
+		observer, ok := mod.(BAPIMempoolObserver)
+		if !ok {
+			continue
+		}
+		if err := observer.OnBlockConstructed(ctx, ev); err != nil {
+			return fmt.Errorf("module %s OnBlockConstructed: %w", mod.Name(), err)
+		}
+	}
+	return nil
 }
 
 // ChainID returns the chain identifier.

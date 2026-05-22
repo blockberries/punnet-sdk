@@ -71,6 +71,21 @@ type BAPIGenesisExporter interface {
 	ExportGenesis(ctx context.Context) ([]byte, error)
 }
 
+// BAPIMempoolObserver is the optional hook for modules that consume
+// the bapi.MempoolObserver events. The BAPIApplication implements
+// bapi.MempoolObserver itself (declared via CapMempoolObserver in the
+// handshake response) and fans the events out to every module that
+// implements this interface. Used by the participation tracker
+// (PLAN §7 Phase 3.3) to count leader_blocks and batches_certified.
+//
+// Modules that don't care about these events simply don't implement
+// the interface; the runtime skips them.
+type BAPIMempoolObserver interface {
+	BAPIModule
+	OnBatchCertified(ctx context.Context, ev types.BatchCertifiedEvent) error
+	OnBlockConstructed(ctx context.Context, ev types.BlockConstructedEvent) error
+}
+
 // BAPITokenomicsConsumer is the optional hook for modules that need
 // chain-wide tokenomics parameters at genesis time
 // (TotalSupply, bootstrap validators + their per-validator BL share,
