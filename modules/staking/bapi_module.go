@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"sync"
 
 	"github.com/blockberries/bapi/types"
 	"github.com/blockberries/punnet-sdk/effects"
@@ -18,6 +20,29 @@ import (
 type BAPIStakingModule struct {
 	validatorStore *store.BAPIValidatorStore
 	balanceStore   *store.BAPIBalanceStore
+
+	// mu guards the in-block change tracking and the previous-block power
+	// snapshot. These are not consensus state — they're a private record of
+	// which validator pubkeys were touched in the current block so EndBlock
+	// can emit only the resulting power deltas (PLAN B2-2). Real state lives
+	// in validatorStore.
+	mu sync.Mutex
+
+	// dirtyValidators holds the hex-encoded pubkey of every validator whose
+	// power may have changed in the current block. Populated by tx handlers,
+	// drained by EndBlock. The keys are hex strings so the set has stable
+	// iteration order when sorted.
+	dirtyValidators map[string]struct{}
+
+	// pubkeyByHex memoizes the raw pubkey bytes per hex key so EndBlock can
+	// rebuild a types.PublicKey without round-tripping through the store.
+	pubkeyByHex map[string][]byte
+
+	// lastEmittedPowers is the power EndBlock last reported to consensus for
+	// each validator (keyed by hex pubkey). EndBlock only emits a
+	// ValidatorUpdate when the current power differs from this snapshot,
+	// avoiding spurious "Power unchanged" updates on every block.
+	lastEmittedPowers map[string]uint64
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -30,9 +55,33 @@ func NewBAPIStakingModule(validatorStore *store.BAPIValidatorStore, balanceStore
 	}
 
 	return &BAPIStakingModule{
-		validatorStore: validatorStore,
-		balanceStore:   balanceStore,
+		validatorStore:    validatorStore,
+		balanceStore:      balanceStore,
+		dirtyValidators:   make(map[string]struct{}),
+		pubkeyByHex:       make(map[string][]byte),
+		lastEmittedPowers: make(map[string]uint64),
 	}, nil
+}
+
+// markValidatorDirty records that a validator was touched in the current
+// block, so EndBlock will reconsider its power. Called by tx handlers
+// (handleCreateValidator) and InitGenesis. The dirty set is private
+// bookkeeping for the block-end aggregation step — it is NOT persisted state
+// and does not violate the effects-not-mutations invariant any more than the
+// runtime collecting events does.
+func (m *BAPIStakingModule) markValidatorDirty(pubKey []byte) {
+	if len(pubKey) == 0 {
+		return
+	}
+	key := hex.EncodeToString(pubKey)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dirtyValidators[key] = struct{}{}
+	if _, ok := m.pubkeyByHex[key]; !ok {
+		buf := make([]byte, len(pubKey))
+		copy(buf, pubKey)
+		m.pubkeyByHex[key] = buf
+	}
 }
 
 // Name returns the module's unique name.
@@ -58,18 +107,255 @@ func (m *BAPIStakingModule) RegisterQueryHandlers() map[string]runtime.BAPIQuery
 }
 
 // BeginBlock is called at the beginning of each block.
+//
+// Resets the in-block dirty-validator tracking. Any validator whose state is
+// modified between this call and the matching EndBlock will be considered for
+// inclusion in the EndBlock's ValidatorUpdates.
 func (m *BAPIStakingModule) BeginBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, error) {
-	// No begin-block processing needed
+	m.mu.Lock()
+	m.dirtyValidators = make(map[string]struct{})
+	m.mu.Unlock()
 	return nil, nil
 }
 
+// Default slash fractions in basis points (10000 = 100%). These are
+// the *fallback* values used when the chain's ConsensusParams does not
+// override them (e.g. test setups that don't seed a params store). The
+// production path reads `blockCtx.Params.SlashFraction*Bps`; the
+// constants below are also exported because callers may want to
+// reference them when constructing test genesis blobs.
+const (
+	// DefaultSlashFractionDoubleSignBps: 500 = 5%.
+	DefaultSlashFractionDoubleSignBps uint32 = 500
+	// DefaultSlashFractionLightClientBps: 1000 = 10%. Strictly higher
+	// than double-sign: light-client attacks target external observers
+	// who can't independently verify the slashable event.
+	DefaultSlashFractionLightClientBps uint32 = 1000
+)
+
+// SlashFractionBasisPoints is the legacy compiled-in fraction used when
+// the per-type knobs above weren't around yet. Retained as an alias for
+// the double-sign default to keep existing tests and callers compiling.
+//
+// Deprecated: read from `BAPIBlockContext.Params` (via
+// `slashFractionFor`) instead — the constant is preserved only for
+// backwards compatibility.
+const SlashFractionBasisPoints uint64 = uint64(DefaultSlashFractionDoubleSignBps)
+
+// slashFractionFor returns the basis-points slash fraction that applies
+// to evType under the block's ConsensusParams. Falls back to the
+// compiled-in default when params are absent or the per-type field is
+// zero (which also means "use the default" by convention).
+func slashFractionFor(params *types.ConsensusParams, evType types.EvidenceType) uint32 {
+	if params != nil {
+		switch evType {
+		case types.EvidenceTypeDuplicateVote:
+			if params.SlashFractionDoubleSignBps != 0 {
+				return params.SlashFractionDoubleSignBps
+			}
+		case types.EvidenceTypeLightClient:
+			if params.SlashFractionLightClientBps != 0 {
+				return params.SlashFractionLightClientBps
+			}
+		}
+	}
+	switch evType {
+	case types.EvidenceTypeLightClient:
+		return DefaultSlashFractionLightClientBps
+	default:
+		return DefaultSlashFractionDoubleSignBps
+	}
+}
+
+// ProcessEvidence reacts to Byzantine evidence by slashing the offending
+// validator. Implements runtime.BAPIEvidenceHandler (PLAN C2).
+//
+// Both DuplicateVote and LightClient evidence types result in a slash +
+// jail. Unknown future types are accepted silently for forward
+// compatibility. The handler:
+//
+//  1. Resolves the validator by the PubKey carried in the evidence
+//     (raspberry's BlockExecutorAdapter populates this from the engine's
+//     ValidatorSet; if absent we have no slashing target and skip).
+//  2. Computes the new power: old - old * slashFractionBps / 10000
+//     (saturating to zero). The fraction comes from `blockCtx.Params`
+//     when set, otherwise from compiled-in defaults. The validator is
+//     marked Jailed.
+//  3. Emits a WriteEffect carrying the updated validator and marks the
+//     pubkey dirty so EndBlock will emit a ValidatorUpdate with the
+//     post-slash power.
+//
+// Returns no error if the validator is unknown — evidence about a
+// validator who has already been removed is a no-op rather than a fatal
+// condition. The chain must keep running.
+func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runtime.BAPIBlockContext, evidence types.Evidence) ([]effects.Effect, error) {
+	if m == nil || m.validatorStore == nil {
+		return nil, fmt.Errorf("module or store is nil")
+	}
+	// Slash on DuplicateVote and LightClient; unknown future types
+	// are silently accepted.
+	var reason string
+	switch evidence.Type {
+	case types.EvidenceTypeDuplicateVote:
+		reason = "double_vote"
+	case types.EvidenceTypeLightClient:
+		reason = "light_client_attack"
+	default:
+		return nil, nil
+	}
+	slashBps := uint64(slashFractionFor(blockCtx.Params, evidence.Type))
+	if len(evidence.PubKey.Data) == 0 {
+		// No pubkey means we cannot look up the validator. Log via event
+		// so operators can see this — but do not halt the chain.
+		return []effects.Effect{
+			effects.NewEventEffect("staking.evidence_unresolved", map[string][]byte{
+				"height": []byte(fmt.Sprintf("%d", blockCtx.Height)),
+				"type":   []byte(fmt.Sprintf("%d", evidence.Type)),
+			}),
+		}, nil
+	}
+
+	validator, err := m.validatorStore.GetValidator(ctx, evidence.PubKey.Data)
+	if err != nil || validator == nil {
+		// Already removed or never existed — emit an event and move on.
+		return []effects.Effect{
+			effects.NewEventEffect("staking.evidence_unknown_validator", map[string][]byte{
+				"height":  []byte(fmt.Sprintf("%d", blockCtx.Height)),
+				"pub_key": []byte(hex.EncodeToString(evidence.PubKey.Data)),
+			}),
+		}, nil
+	}
+
+	// Compute new power. Saturating subtraction guards against the
+	// (impossible-in-practice but easy-to-reason-about) underflow case
+	// where the fraction calculation rounds upward.
+	prevPower := validator.Power
+	slashAmt := (prevPower * slashBps) / 10000
+	if slashAmt > prevPower {
+		slashAmt = prevPower
+	}
+	newPower := prevPower - slashAmt
+
+	updated := &store.BAPIValidator{
+		PubKey:          validator.PubKey,
+		Power:           newPower,
+		Jailed:          true,
+		Description:     validator.Description,
+		Commission:      validator.Commission,
+		TotalDelegation: validator.TotalDelegation,
+	}
+
+	// Mark the validator dirty so EndBlock emits a ValidatorUpdate
+	// reflecting the post-slash power. Without this, EndBlock would not
+	// know the validator changed and consensus would never learn about
+	// the slash.
+	m.markValidatorDirty(evidence.PubKey.Data)
+
+	return []effects.Effect{
+		&effects.WriteEffect[*store.BAPIValidator]{
+			Store:    "validators",
+			StoreKey: []byte(hex.EncodeToString(evidence.PubKey.Data)),
+			Value:    updated,
+		},
+		effects.NewEventEffect("staking.validator_slashed", map[string][]byte{
+			"pub_key":    []byte(hex.EncodeToString(evidence.PubKey.Data)),
+			"prev_power": []byte(fmt.Sprintf("%d", prevPower)),
+			"new_power":  []byte(fmt.Sprintf("%d", newPower)),
+			"slash_amt":  []byte(fmt.Sprintf("%d", slashAmt)),
+			"height":     []byte(fmt.Sprintf("%d", blockCtx.Height)),
+			"reason":     []byte(reason),
+		}),
+	}, nil
+}
+
 // EndBlock is called at the end of each block.
-// It returns validator updates for consensus.
+//
+// Walks the set of validators dirtied during the block, reads each one's
+// current power from validatorStore (after all tx effects have been applied
+// by the runtime), and emits a ValidatorUpdate for every validator whose
+// power differs from the value EndBlock last reported. A validator that is
+// no longer in the store is reported with Power=0, which BAPI defines as
+// removal. The updates are sorted by hex pubkey so the result is
+// deterministic across nodes (PLAN B2-2).
 func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, []types.ValidatorUpdate, error) {
-	// For now, return empty validator updates
-	// In a full implementation, we would track power changes during the block
-	// and return the accumulated updates here
-	return nil, nil, nil
+	m.mu.Lock()
+	// Snapshot the dirty set so we can release the lock before doing store
+	// I/O. We hold the lock again briefly later to update lastEmittedPowers.
+	dirtyKeys := make([]string, 0, len(m.dirtyValidators))
+	for k := range m.dirtyValidators {
+		dirtyKeys = append(dirtyKeys, k)
+	}
+	// Capture the pubkey bytes too.
+	pubkeysByHex := make(map[string][]byte, len(dirtyKeys))
+	for _, k := range dirtyKeys {
+		if pk, ok := m.pubkeyByHex[k]; ok {
+			pubkeysByHex[k] = pk
+		}
+	}
+	m.mu.Unlock()
+
+	if len(dirtyKeys) == 0 {
+		return nil, nil, nil
+	}
+
+	// Deterministic emission order: sort hex pubkeys lexicographically.
+	sort.Strings(dirtyKeys)
+
+	updates := make([]types.ValidatorUpdate, 0, len(dirtyKeys))
+	newPowers := make(map[string]uint64, len(dirtyKeys))
+
+	for _, hexKey := range dirtyKeys {
+		pkBytes := pubkeysByHex[hexKey]
+		if len(pkBytes) == 0 {
+			// We can still try to decode from hex if pubkeyByHex didn't
+			// have the entry (defensive — shouldn't happen).
+			decoded, err := hex.DecodeString(hexKey)
+			if err != nil {
+				continue
+			}
+			pkBytes = decoded
+		}
+
+		var currentPower uint64
+		validator, err := m.validatorStore.GetValidator(ctx, pkBytes)
+		switch {
+		case err == nil && validator != nil:
+			currentPower = validator.Power
+		default:
+			// Validator no longer present (or read error treated as
+			// removal). Power=0 signals removal to BAPI consumers.
+			currentPower = 0
+		}
+
+		newPowers[hexKey] = currentPower
+
+		m.mu.Lock()
+		prev, hadPrev := m.lastEmittedPowers[hexKey]
+		m.mu.Unlock()
+		// Only emit when the power actually changed since the previous
+		// EndBlock. The first time we see a validator (no `prev` recorded)
+		// we always emit so consensus learns the initial power.
+		if hadPrev && prev == currentPower {
+			continue
+		}
+
+		updates = append(updates, types.ValidatorUpdate{
+			PubKey: types.PublicKey{
+				Type: types.KeyTypeEd25519,
+				Data: pkBytes,
+			},
+			Power: currentPower,
+		})
+	}
+
+	// Persist the new powers as the baseline for the next block's diffs.
+	m.mu.Lock()
+	for k, v := range newPowers {
+		m.lastEmittedPowers[k] = v
+	}
+	m.mu.Unlock()
+
+	return nil, updates, nil
 }
 
 // InitGenesis initializes the module's state from genesis data.
@@ -105,18 +391,68 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 		if err := m.validatorStore.SetValidator(ctx, bapiValidator); err != nil {
 			return fmt.Errorf("set genesis validator: %w", err)
 		}
+
+		// Pre-seed lastEmittedPowers with the genesis power so the first
+		// EndBlock doesn't re-emit every genesis validator as a "change".
+		// Consensus already knows the genesis ValidatorSet — only future
+		// power changes need to be reported. Tests / hosts that want the
+		// initial set re-emitted can call markValidatorDirty manually.
+		m.mu.Lock()
+		hexKey := hex.EncodeToString(pubKey)
+		m.lastEmittedPowers[hexKey] = bapiValidator.Power
+		pk := make([]byte, len(pubKey))
+		copy(pk, pubKey)
+		m.pubkeyByHex[hexKey] = pk
+		m.mu.Unlock()
 	}
 
 	return nil
 }
 
 // ExportGenesis exports the module's state for genesis.
+//
+// Walks every validator currently in the store via the IterateValidators
+// accessor (which uses the iterable StateStore added in PLAN BAPI
+// store-iteration) and emits a sorted GenesisValidator list. The
+// output is deterministic: iteration order is the tree's ascending
+// byte order over hex-encoded pubkeys, plus we sort explicitly by
+// pubkey so any future change to the underlying iteration order
+// doesn't break replay.
+//
+// When the underlying store is not iterable (test in-memory stores),
+// silently returns an empty validator list. Genesis is best-effort in
+// that mode anyway.
 func (m *BAPIStakingModule) ExportGenesis(ctx context.Context) ([]byte, error) {
-	// For now, return empty state - full export would require iteration
-	genesisState := StakingGenesisState{
-		Validators: []GenesisValidator{},
+	if m == nil || m.validatorStore == nil {
+		return json.Marshal(StakingGenesisState{Validators: []GenesisValidator{}})
 	}
-	return json.Marshal(genesisState)
+
+	var validators []GenesisValidator
+	err := m.validatorStore.IterateValidators(func(v *store.BAPIValidator) bool {
+		validators = append(validators, GenesisValidator{
+			PubKey:      hex.EncodeToString(v.PubKey.Data),
+			Power:       v.Power,
+			Description: v.Description,
+			Commission:  v.Commission,
+		})
+		return false
+	})
+	if err != nil {
+		// Iteration unsupported / store error — fall back to empty rather
+		// than blocking the export of other modules. Genesis is
+		// best-effort; chains that need a real export must run on an
+		// iterable backend.
+		return json.Marshal(StakingGenesisState{Validators: []GenesisValidator{}})
+	}
+
+	// Sort by pubkey for determinism — IterateValidators already produces
+	// stable order from a real iterable store, but defensive sorting
+	// guards against backends that don't.
+	sort.Slice(validators, func(i, j int) bool {
+		return validators[i].PubKey < validators[j].PubKey
+	})
+
+	return json.Marshal(StakingGenesisState{Validators: validators})
 }
 
 // StakingGenesisState represents the staking module's genesis state.
@@ -133,6 +469,20 @@ type GenesisValidator struct {
 }
 
 // handleCreateValidator handles MsgCreateValidator.
+//
+// Per the SDK's effects-not-mutations invariant (CLAUDE.md), this handler
+// returns a WriteEffect[*store.BAPIValidator] instead of calling
+// validatorStore.SetValidator directly. Direct mutation here previously
+// bypassed the effect executor entirely — it ran outside the transaction
+// pipeline's commit boundary and was not visible to validation / replay
+// logic. PLAN T1-8 tracked this regression.
+//
+// The WriteEffect's Store name is "validators" and its StoreKey is the
+// hex-encoded pubkey — matching the prefix and key scheme used by
+// store.BAPIValidatorStore (see validatorKey() in bapi_validator_store.go).
+// The executor (effects.BAPIExecutor.executeWrite) writes raw bytes to the
+// state store under "validators/<hex-pubkey>", which is exactly the layout
+// the typed store reads from.
 func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *runtime.BAPITxContext, msg ptypes.Message) ([]effects.Effect, error) {
 	if m == nil || m.validatorStore == nil {
 		return nil, fmt.Errorf("module or store is nil")
@@ -160,7 +510,9 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 		return nil, fmt.Errorf("validator with public key %x already exists", createMsg.PubKey)
 	}
 
-	// Create validator
+	// Build the validator value. NOTE: do NOT call validatorStore.SetValidator
+	// here — that would bypass the effect system. The WriteEffect below is the
+	// only path that persists state.
 	validator := &store.BAPIValidator{
 		PubKey: types.PublicKey{
 			Type: types.KeyTypeEd25519,
@@ -173,13 +525,16 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 		TotalDelegation: 0,
 	}
 
-	// Store validator
-	if err := m.validatorStore.SetValidator(ctx, validator); err != nil {
-		return nil, fmt.Errorf("failed to set validator: %w", err)
-	}
+	// Mark this validator as dirty so EndBlock will emit a ValidatorUpdate
+	// reflecting the new power. Does not write any state.
+	m.markValidatorDirty(createMsg.PubKey)
 
-	// Return event effect
 	return []effects.Effect{
+		&effects.WriteEffect[*store.BAPIValidator]{
+			Store:    "validators",
+			StoreKey: []byte(hex.EncodeToString(createMsg.PubKey)),
+			Value:    validator,
+		},
 		effects.NewEventEffect("staking.validator_created", map[string][]byte{
 			"delegator":  []byte(createMsg.Delegator),
 			"pub_key":    []byte(hex.EncodeToString(createMsg.PubKey)),
@@ -248,6 +603,18 @@ func (m *BAPIStakingModule) handleDelegate(ctx context.Context, txCtx *runtime.B
 }
 
 // handleUndelegate handles MsgUndelegate.
+//
+// Returns three effects: (1) a WriteEffect that decrements the delegation
+// record by the undelegated amount, (2) a TransferEffect moving the tokens
+// from the staking pool back to the delegator, and (3) an event. Previously
+// this handler only issued the transfer — the delegation record was never
+// decremented, so the same stake could be undelegated repeatedly (PLAN T1-8 /
+// B2-3). Decrementing via WriteEffect keeps the change inside the effect
+// pipeline, matching the SDK's effects-not-mutations invariant. If the
+// remaining delegation reaches zero, the WriteEffect still writes a zero-amount
+// record rather than deleting the row; callers that care about "delegation
+// exists" should compare Amount, not key presence, which is also what
+// validatorStore.GetDelegation does (it returns zero on ErrNotFound).
 func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime.BAPITxContext, msg ptypes.Message) ([]effects.Effect, error) {
 	if m == nil || m.validatorStore == nil || m.balanceStore == nil {
 		return nil, fmt.Errorf("module or store is nil")
@@ -279,15 +646,33 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 			ptypes.ErrInsufficientFunds, delegation.Amount, undelegateMsg.Amount.Amount)
 	}
 
-	// Return effects: transfer tokens back from staking pool
+	// Build the post-undelegation delegation record. The store key for a
+	// delegation is "<delegator>/<hex-validator-pubkey>" (see
+	// delegationKey() in bapi_validator_store.go); the WriteEffect writes to
+	// "delegations/<that-key>" which the typed store reads from.
+	updatedDelegation := &store.BAPIDelegation{
+		Delegator:       delegation.Delegator,
+		ValidatorPubKey: delegation.ValidatorPubKey,
+		Amount:          delegation.Amount - undelegateMsg.Amount.Amount,
+	}
+	delegationStoreKey := string(undelegateMsg.Delegator) + "/" + hex.EncodeToString(undelegateMsg.Validator)
+
 	return []effects.Effect{
-		// Transfer tokens from staking pool back to delegator
+		// Decrement the delegation record. Without this effect the transfer
+		// below would fire but the delegation amount would never go down,
+		// allowing repeated undelegation of the same stake (T1-8 / B2-3).
+		&effects.WriteEffect[*store.BAPIDelegation]{
+			Store:    "delegations",
+			StoreKey: []byte(delegationStoreKey),
+			Value:    updatedDelegation,
+		},
+		// Transfer tokens from staking pool back to delegator.
 		effects.TransferEffect{
 			From:   ptypes.AccountName("staking.pool"),
 			To:     undelegateMsg.Delegator,
 			Amount: ptypes.Coins{undelegateMsg.Amount},
 		},
-		// Emit event
+		// Emit event.
 		effects.NewEventEffect("staking.undelegated", map[string][]byte{
 			"delegator": []byte(undelegateMsg.Delegator),
 			"validator": []byte(hex.EncodeToString(undelegateMsg.Validator)),
@@ -382,6 +767,7 @@ func (m *BAPIStakingModule) handleQueryDelegation(ctx context.Context, data []by
 var (
 	_ runtime.BAPIModule             = (*BAPIStakingModule)(nil)
 	_ runtime.BAPIBlockProcessor     = (*BAPIStakingModule)(nil)
+	_ runtime.BAPIEvidenceHandler    = (*BAPIStakingModule)(nil)
 	_ runtime.BAPIGenesisInitializer = (*BAPIStakingModule)(nil)
 	_ runtime.BAPIGenesisExporter    = (*BAPIStakingModule)(nil)
 )

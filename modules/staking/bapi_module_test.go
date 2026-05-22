@@ -107,20 +107,34 @@ func TestBAPIStakingModule_HandleCreateValidator(t *testing.T) {
 			Commission:   500, // 5%
 		}
 
+		// PLAN B2-1 / T1-8: handleCreateValidator must NOT mutate the store
+		// directly. It returns a WriteEffect followed by an EventEffect.
 		effs, err := mod.handleCreateValidator(ctx, txCtx, msg)
 		require.NoError(t, err)
-		assert.Len(t, effs, 1)
+		require.Len(t, effs, 2)
 
-		// Check event effect
-		eventEff, ok := effs[0].(effects.EventEffect)
-		assert.True(t, ok)
+		// First effect is the validator write — the effect carries the
+		// validator value and the store/key under which it will be written.
+		writeEff, ok := effs[0].(*effects.WriteEffect[*store.BAPIValidator])
+		require.True(t, ok, "first effect must be *WriteEffect[*BAPIValidator], got %T", effs[0])
+		assert.Equal(t, "validators", writeEff.Store)
+		assert.Equal(t, []byte(hex.EncodeToString(pubKey)), writeEff.StoreKey)
+		require.NotNil(t, writeEff.Value)
+		assert.Equal(t, uint64(100), writeEff.Value.Power)
+		assert.Equal(t, uint32(500), writeEff.Value.Commission)
+		assert.Equal(t, pubKey, writeEff.Value.PubKey.Data)
+
+		// Second effect is the event.
+		eventEff, ok := effs[1].(effects.EventEffect)
+		require.True(t, ok)
 		assert.Equal(t, "staking.validator_created", eventEff.EventType)
 
-		// Verify validator was created
-		validator, err := validatorStore.GetValidator(ctx, pubKey)
+		// Effects-not-mutations invariant: the store must NOT yet contain the
+		// validator. Persistence is owned by the effect executor, not the
+		// handler.
+		exists, err := validatorStore.HasValidator(ctx, pubKey)
 		require.NoError(t, err)
-		assert.Equal(t, uint64(100), validator.Power)
-		assert.Equal(t, uint32(500), validator.Commission)
+		assert.False(t, exists, "handler must not mutate the validator store directly")
 	})
 
 	t.Run("fails when delegator doesn't match signer", func(t *testing.T) {
@@ -143,6 +157,15 @@ func TestBAPIStakingModule_HandleCreateValidator(t *testing.T) {
 	})
 
 	t.Run("fails when validator already exists", func(t *testing.T) {
+		// Pre-populate the store directly (simulating a previously-committed
+		// validator) so the existence check fires.
+		existing := &store.BAPIValidator{
+			PubKey:     types.PublicKey{Type: types.KeyTypeEd25519, Data: pubKey},
+			Power:      100,
+			Commission: 500,
+		}
+		require.NoError(t, validatorStore.SetValidator(ctx, existing))
+
 		txCtx := &runtime.BAPITxContext{
 			BAPIBlockContext: blockCtx,
 			Account:          ptypes.AccountName("alice"),
@@ -151,7 +174,7 @@ func TestBAPIStakingModule_HandleCreateValidator(t *testing.T) {
 
 		msg := &MsgCreateValidator{
 			Delegator:    ptypes.AccountName("alice"),
-			PubKey:       pubKey, // Same pubkey as before
+			PubKey:       pubKey, // Same pubkey as pre-populated
 			InitialPower: 200,
 			Commission:   500,
 		}
@@ -333,17 +356,27 @@ func TestBAPIStakingModule_HandleUndelegate(t *testing.T) {
 
 		effs, err := mod.handleUndelegate(ctx, txCtx, msg)
 		require.NoError(t, err)
-		assert.Len(t, effs, 2)
+		// PLAN B2-3: handler now returns three effects: a delegation
+		// decrement (WriteEffect), the pool→delegator transfer, and the
+		// event.
+		require.Len(t, effs, 3)
 
-		// Check transfer effect
-		transferEff, ok := effs[0].(effects.TransferEffect)
-		assert.True(t, ok)
+		// First effect: delegation decrement.
+		writeEff, ok := effs[0].(*effects.WriteEffect[*store.BAPIDelegation])
+		require.True(t, ok, "first effect must be *WriteEffect[*BAPIDelegation], got %T", effs[0])
+		assert.Equal(t, "delegations", writeEff.Store)
+		require.NotNil(t, writeEff.Value)
+		assert.Equal(t, uint64(400), writeEff.Value.Amount, "delegation must drop from 500 to 400")
+
+		// Second effect: transfer.
+		transferEff, ok := effs[1].(effects.TransferEffect)
+		require.True(t, ok)
 		assert.Equal(t, ptypes.AccountName("staking.pool"), transferEff.From)
 		assert.Equal(t, ptypes.AccountName("alice"), transferEff.To)
 
-		// Check event effect
-		eventEff, ok := effs[1].(effects.EventEffect)
-		assert.True(t, ok)
+		// Third effect: event.
+		eventEff, ok := effs[2].(effects.EventEffect)
+		require.True(t, ok)
 		assert.Equal(t, "staking.undelegated", eventEff.EventType)
 	})
 
