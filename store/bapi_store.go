@@ -179,3 +179,46 @@ func (s *TypedStore[T]) Prefix() string {
 func (s *TypedStore[T]) StateStore() statestore.StateStore {
 	return s.store
 }
+
+// IterateRelative walks every (relative-key, value) entry currently under
+// this typed store's prefix, invoking fn for each. The relative key is
+// the part AFTER the prefix (e.g. for an "accounts/" store with key
+// "accounts/alice" the callback sees "alice"). fn returns true to stop
+// iteration.
+//
+// Returns ErrIterationUnsupported if the underlying StateStore does not
+// implement statestore.Iterable. Codec decode errors are swallowed and
+// the offending entry is skipped — see comment inline.
+//
+// This is the read-side primitive that lets typed-store wrappers (e.g.
+// BAPIAccountStore.TrackedKeys) rebuild their in-memory key index after
+// a process restart. Without it, the index stays empty until a write
+// touches each key, and any list-style query immediately after restart
+// returns nothing.
+func (s *TypedStore[T]) IterateRelative(fn func(relKey string, value T) bool) error {
+	if s.store == nil {
+		return ErrStoreNil
+	}
+	iterable, ok := s.store.(statestore.Iterable)
+	if !ok {
+		return ErrIterationUnsupported
+	}
+	prefixBytes := []byte(s.prefix)
+	return iterable.Iterate(prefixBytes, func(k, v []byte) bool {
+		// Defensive: only strip the prefix from keys that actually
+		// match (the underlying Iterable guarantees this, but a
+		// double-check is cheap).
+		if len(k) < len(prefixBytes) {
+			return false
+		}
+		rel := string(k[len(prefixBytes):])
+		// Codec decode failure for one key shouldn't halt the whole
+		// rebuild; skip and continue. The miss surfaces as a
+		// (intentional) empty entry rather than an error return.
+		value, err := s.codec.Decode(v)
+		if err != nil {
+			return false
+		}
+		return fn(rel, value)
+	})
+}

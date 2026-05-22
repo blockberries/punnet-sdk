@@ -20,6 +20,13 @@ var (
 
 	// ErrStoreNil is returned when a store is nil
 	ErrStoreNil = errors.New("store is nil")
+
+	// ErrIterationUnsupported is returned by TypedStore.IterateRelative
+	// when the underlying StateStore does not implement
+	// statestore.Iterable. Callers that maintain a key index should
+	// treat this as "no rebuild possible" and fall back to the existing
+	// write-time-tracked index.
+	ErrIterationUnsupported = errors.New("underlying state store does not support iteration")
 )
 
 // ObjectStore is a typed key-value store interface with caching support
