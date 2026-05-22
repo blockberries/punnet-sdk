@@ -67,10 +67,8 @@ func (s *StakingClient) ValidatorAtHeight(ctx context.Context, name types.Accoun
 		return nil, fmt.Errorf("invalid validator name: %s", name)
 	}
 
-	data, err := encodeQueryData(map[string]string{"name": string(name)})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects hex-encoded pubkey or raw bytes
+	data := []byte(name)
 
 	var resp ValidatorResponse
 	if err := s.client.QueryJSON(ctx, "/staking/validator", data, height, &resp); err != nil {
@@ -108,13 +106,8 @@ func (s *StakingClient) DelegationAtHeight(ctx context.Context, delegator, valid
 		return nil, fmt.Errorf("invalid validator name: %s", validator)
 	}
 
-	data, err := encodeQueryData(map[string]string{
-		"delegator": string(delegator),
-		"validator": string(validator),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects "delegator/validator_hex" format
+	data := []byte(fmt.Sprintf("%s/%s", delegator, validator))
 
 	var resp DelegationResponse
 	if err := s.client.QueryJSON(ctx, "/staking/delegation", data, height, &resp); err != nil {
@@ -135,10 +128,8 @@ func (s *StakingClient) DelegatorDelegationsAtHeight(ctx context.Context, delega
 		return nil, fmt.Errorf("invalid delegator name: %s", delegator)
 	}
 
-	data, err := encodeQueryData(map[string]string{"delegator": string(delegator)})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects raw delegator name bytes
+	data := []byte(delegator)
 
 	var resp []DelegationResponse
 	if err := s.client.QueryJSON(ctx, "/staking/delegations", data, height, &resp); err != nil {
@@ -154,10 +145,8 @@ func (s *StakingClient) UnbondingDelegations(ctx context.Context, delegator type
 		return nil, fmt.Errorf("invalid delegator name: %s", delegator)
 	}
 
-	data, err := encodeQueryData(map[string]string{"delegator": string(delegator)})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects raw delegator name bytes
+	data := []byte(delegator)
 
 	var resp []UnbondingDelegationResponse
 	if err := s.client.QueryJSON(ctx, "/staking/unbonding_delegations", data, 0, &resp); err != nil {

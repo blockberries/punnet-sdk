@@ -36,10 +36,8 @@ func (a *AuthClient) AccountAtHeight(ctx context.Context, name types.AccountName
 		return nil, fmt.Errorf("invalid account name: %s", name)
 	}
 
-	data, err := encodeQueryData(map[string]string{"name": string(name)})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Send raw account name bytes - the server handler expects plain bytes
+	data := []byte(name)
 
 	var resp AccountResponse
 	if err := a.client.QueryJSON(ctx, "/auth/account", data, height, &resp); err != nil {

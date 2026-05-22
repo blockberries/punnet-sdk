@@ -50,13 +50,8 @@ func (b *BankClient) BalanceAtHeight(ctx context.Context, account types.AccountN
 		return nil, fmt.Errorf("denom cannot be empty")
 	}
 
-	data, err := encodeQueryData(map[string]string{
-		"account": string(account),
-		"denom":   denom,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects "account/denom" format
+	data := []byte(fmt.Sprintf("%s/%s", account, denom))
 
 	var resp BalanceResponse
 	if err := b.client.QueryJSON(ctx, "/bank/balance", data, height, &resp); err != nil {
@@ -77,12 +72,8 @@ func (b *BankClient) AllBalancesAtHeight(ctx context.Context, account types.Acco
 		return nil, fmt.Errorf("invalid account name: %s", account)
 	}
 
-	data, err := encodeQueryData(map[string]string{
-		"account": string(account),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects raw account name bytes
+	data := []byte(account)
 
 	var resp AllBalancesResponse
 	if err := b.client.QueryJSON(ctx, "/bank/balances", data, height, &resp); err != nil {
@@ -103,10 +94,8 @@ func (b *BankClient) TotalSupplyAtHeight(ctx context.Context, denom string, heig
 		return nil, fmt.Errorf("denom cannot be empty")
 	}
 
-	data, err := encodeQueryData(map[string]string{"denom": denom})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects raw denom bytes
+	data := []byte(denom)
 
 	var resp SupplyResponse
 	if err := b.client.QueryJSON(ctx, "/bank/supply", data, height, &resp); err != nil {

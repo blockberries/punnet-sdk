@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/blockberries/punnet-sdk/types"
@@ -90,10 +91,8 @@ func (g *GovernanceClient) ProposalAtHeight(ctx context.Context, id uint64, heig
 		return nil, fmt.Errorf("proposal ID cannot be zero")
 	}
 
-	data, err := encodeQueryData(map[string]uint64{"id": id})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Server handler expects proposal ID as raw numeric string
+	data := []byte(strconv.FormatUint(id, 10))
 
 	var resp ProposalResponse
 	if err := g.client.QueryJSON(ctx, "/gov/proposal", data, height, &resp); err != nil {
@@ -111,13 +110,8 @@ func (g *GovernanceClient) Proposals(ctx context.Context) ([]ProposalResponse, e
 // ProposalsWithStatus retrieves proposals filtered by status.
 func (g *GovernanceClient) ProposalsWithStatus(ctx context.Context, status string) ([]ProposalResponse, error) {
 	var data []byte
-	var err error
-
 	if status != "" {
-		data, err = encodeQueryData(map[string]string{"status": status})
-		if err != nil {
-			return nil, fmt.Errorf("encode query data: %w", err)
-		}
+		data = []byte(status)
 	}
 
 	var resp []ProposalResponse
@@ -137,13 +131,8 @@ func (g *GovernanceClient) Vote(ctx context.Context, proposalID uint64, voter ty
 		return nil, fmt.Errorf("invalid voter name: %s", voter)
 	}
 
-	data, err := encodeQueryData(map[string]any{
-		"proposal_id": proposalID,
-		"voter":       string(voter),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Format: "proposalID/voter"
+	data := []byte(fmt.Sprintf("%d/%s", proposalID, voter))
 
 	var resp VoteResponse
 	if err := g.client.QueryJSON(ctx, "/gov/vote", data, 0, &resp); err != nil {
@@ -159,10 +148,7 @@ func (g *GovernanceClient) Votes(ctx context.Context, proposalID uint64) ([]Vote
 		return nil, fmt.Errorf("proposal ID cannot be zero")
 	}
 
-	data, err := encodeQueryData(map[string]uint64{"proposal_id": proposalID})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	data := []byte(strconv.FormatUint(proposalID, 10))
 
 	var resp []VoteResponse
 	if err := g.client.QueryJSON(ctx, "/gov/votes", data, 0, &resp); err != nil {
@@ -181,13 +167,8 @@ func (g *GovernanceClient) Deposit(ctx context.Context, proposalID uint64, depos
 		return nil, fmt.Errorf("invalid depositor name: %s", depositor)
 	}
 
-	data, err := encodeQueryData(map[string]any{
-		"proposal_id": proposalID,
-		"depositor":   string(depositor),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	// Format: "proposalID/depositor"
+	data := []byte(fmt.Sprintf("%d/%s", proposalID, depositor))
 
 	var resp DepositResponse
 	if err := g.client.QueryJSON(ctx, "/gov/deposit", data, 0, &resp); err != nil {
@@ -203,10 +184,7 @@ func (g *GovernanceClient) Deposits(ctx context.Context, proposalID uint64) ([]D
 		return nil, fmt.Errorf("proposal ID cannot be zero")
 	}
 
-	data, err := encodeQueryData(map[string]uint64{"proposal_id": proposalID})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	data := []byte(strconv.FormatUint(proposalID, 10))
 
 	var resp []DepositResponse
 	if err := g.client.QueryJSON(ctx, "/gov/deposits", data, 0, &resp); err != nil {
@@ -222,10 +200,7 @@ func (g *GovernanceClient) Tally(ctx context.Context, proposalID uint64) (*Tally
 		return nil, fmt.Errorf("proposal ID cannot be zero")
 	}
 
-	data, err := encodeQueryData(map[string]uint64{"proposal_id": proposalID})
-	if err != nil {
-		return nil, fmt.Errorf("encode query data: %w", err)
-	}
+	data := []byte(strconv.FormatUint(proposalID, 10))
 
 	var resp TallyResponse
 	if err := g.client.QueryJSON(ctx, "/gov/tally", data, 0, &resp); err != nil {
