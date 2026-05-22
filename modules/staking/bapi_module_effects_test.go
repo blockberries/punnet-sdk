@@ -47,7 +47,7 @@ func TestHandleCreateValidator_EffectExecutionPersists(t *testing.T) {
 		Delegator:    ptypes.AccountName("alice"),
 		PubKey:       pubKey,
 		InitialPower: 250,
-		Commission:   300, // 3%
+		Commission:   500, // 5%, at the c_min floor
 	}
 
 	// Pre-condition: validator does not exist.
@@ -73,7 +73,7 @@ func TestHandleCreateValidator_EffectExecutionPersists(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, v)
 	assert.Equal(t, uint64(250), v.Power)
-	assert.Equal(t, uint32(300), v.Commission)
+	assert.Equal(t, uint32(500), v.Commission)
 	assert.Equal(t, pubKey, v.PubKey.Data)
 	assert.Equal(t, types.KeyTypeEd25519, v.PubKey.Type)
 }
@@ -258,7 +258,7 @@ func TestEndBlock_EmitsValidatorUpdateForNewValidator(t *testing.T) {
 		Delegator:    h.delegator,
 		PubKey:       pubKey,
 		InitialPower: 77,
-		Commission:   100,
+		Commission:   500,
 	}
 	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, createMsg)
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestEndBlock_NoUpdatesWhenNothingChanged(t *testing.T) {
 		Delegator:    h.delegator,
 		PubKey:       pubKey,
 		InitialPower: 50,
-		Commission:   200,
+		Commission:   500,
 	})
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
@@ -319,6 +319,7 @@ func TestEndBlock_EmitsZeroPowerOnDeletion(t *testing.T) {
 		Delegator:    h.delegator,
 		PubKey:       pubKey,
 		InitialPower: 10,
+		Commission:   500,
 	})
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
@@ -354,14 +355,14 @@ func TestEndBlock_DeterministicOrdering(t *testing.T) {
 	// Create the high-pubkey one FIRST so insertion order is reversed from
 	// sorted order; if EndBlock weren't sorting, we'd see [high, low].
 	effs, err := h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator: h.delegator, PubKey: pkHigh, InitialPower: 200,
+		Delegator: h.delegator, PubKey: pkHigh, InitialPower: 200, Commission: 500,
 	})
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
 	require.NoError(t, err)
 
 	effs, err = h.mod.handleCreateValidator(ctx, h.txCtx, &MsgCreateValidator{
-		Delegator: h.delegator, PubKey: pkLow, InitialPower: 100,
+		Delegator: h.delegator, PubKey: pkLow, InitialPower: 100, Commission: 500,
 	})
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)
@@ -396,6 +397,7 @@ func TestProcessEvidence_SlashesValidatorPower(t *testing.T) {
 		Delegator:    h.delegator,
 		PubKey:       pubKey,
 		InitialPower: int64(initialPower),
+		Commission:   500,
 	})
 	require.NoError(t, err)
 	_, err = h.exec.Execute(effs)

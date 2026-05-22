@@ -150,6 +150,14 @@ const (
 // authoritative value. PLAN §7 Phase 2.1.
 const UnbondingPeriodBlocks uint64 = 21 * 24 * 60 * 60
 
+// CommissionFloorBps is the minimum commission rate, in basis points,
+// that any validator (bootstrap or otherwise) may carry. Spec §5 sets
+// c_min = 5% = 500 bps. MsgCreateValidator and any future
+// MsgEditValidator must reject submissions below this floor. PLAN §7
+// Phase 2.2 / D17 (bootstrap validators are pinned at exactly this
+// value).
+const CommissionFloorBps uint32 = 500
+
 // SlashFractionBasisPoints is the legacy compiled-in fraction used when
 // the per-type knobs above weren't around yet. Retained as an alias for
 // the double-sign default to keep existing tests and callers compiling.
@@ -582,6 +590,14 @@ func (m *BAPIStakingModule) handleCreateValidator(ctx context.Context, txCtx *ru
 	// Verify the delegator is the transaction signer
 	if createMsg.Delegator != txCtx.Account {
 		return nil, fmt.Errorf("delegator must be transaction account")
+	}
+
+	// Phase 2.2: enforce the c_min = 5% commission floor on creation.
+	// Future MsgEditValidator must re-check (and additionally pin
+	// bootstrap validators per D17).
+	if uint32(createMsg.Commission) < CommissionFloorBps {
+		return nil, fmt.Errorf("commission %d bps below floor %d bps (c_min = 5%%)",
+			createMsg.Commission, CommissionFloorBps)
 	}
 
 	// Check if validator already exists
