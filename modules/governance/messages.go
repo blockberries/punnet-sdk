@@ -99,6 +99,12 @@ type MsgSubmitProposal struct {
 
 	// InitialDeposit is the initial deposit for the proposal.
 	InitialDeposit types.Coin `json:"initial_deposit"`
+
+	// Class is the proposal class — drives both the vote
+	// threshold and the post-pass timelock. PLAN §7 Phase 4.1;
+	// see governance constants ProposalClass*. Empty defaults to
+	// ProposalClassSimple7d.
+	Class string `json:"class,omitempty"`
 }
 
 // Type returns the message type.
@@ -134,6 +140,11 @@ func (m *MsgSubmitProposal) ValidateBasic() error {
 	if !m.InitialDeposit.IsValid() {
 		return fmt.Errorf("invalid initial deposit")
 	}
+	// Class is validated against the module's known set in the
+	// handler (the constants live in the bapi_module.go file and
+	// would create an import cycle if referenced here). An unknown
+	// class string passes ValidateBasic but is rejected by the
+	// handler with a clear error.
 	return nil
 }
 

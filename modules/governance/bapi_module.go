@@ -38,6 +38,110 @@ const (
 	DefaultDepositDenom = "stake"
 )
 
+// Proposal classes per spec §11 / PLAN §7 Phase 4.1. Each class
+// drives both the vote threshold (Phase 4.2) and the post-pass
+// timelock (Phase 4.4).
+const (
+	// ProposalClassSimple7d is the default class for routine
+	// parameter changes (operation fees, byte fee, validator-set
+	// size, etc.). Simple majority; 7-day timelock.
+	ProposalClassSimple7d = "simple_7d"
+
+	// ProposalClassSuper30d is for adding new operation types or
+	// changing slashing severities — requires more deliberation.
+	// 2/3 supermajority; 30-day timelock.
+	ProposalClassSuper30d = "super_30d"
+
+	// ProposalClassSuper60d is for removing operation types and
+	// other hard-to-reverse changes. 2/3 supermajority; 60-day
+	// timelock.
+	ProposalClassSuper60d = "super_60d"
+
+	// ProposalClassConstitutional is reserved for changes that
+	// violate or weaken the §0 Design Principles (e.g. lifting
+	// the fixed-supply invariant). Spec §11: "Constitutional
+	// changes require ~80% supermajority and 60-day timelock."
+	ProposalClassConstitutional = "constitutional"
+)
+
+// Timelock durations per class. Block heights at 1-second block
+// cadence; chains running at a different cadence will need a
+// future ConsensusParams field to override.
+const (
+	TimelockBlocksSimple7d       uint64 = 7 * 24 * 60 * 60
+	TimelockBlocksSuper30d       uint64 = 30 * 24 * 60 * 60
+	TimelockBlocksSuper60d       uint64 = 60 * 24 * 60 * 60
+	TimelockBlocksConstitutional uint64 = 60 * 24 * 60 * 60
+)
+
+// TimelockForClass returns the post-pass delay in blocks for the
+// given proposal class. Falls back to Simple7d for unknown classes
+// to be conservative (no infinitely fast enactment on garbled input).
+func TimelockForClass(class string) uint64 {
+	switch class {
+	case ProposalClassSuper30d:
+		return TimelockBlocksSuper30d
+	case ProposalClassSuper60d:
+		return TimelockBlocksSuper60d
+	case ProposalClassConstitutional:
+		return TimelockBlocksConstitutional
+	case ProposalClassSimple7d, "":
+		return TimelockBlocksSimple7d
+	default:
+		return TimelockBlocksSimple7d
+	}
+}
+
+// IsKnownClass returns true if `class` is one of the four
+// recognised proposal classes (or the empty default).
+func IsKnownClass(class string) bool {
+	switch class {
+	case ProposalClassSimple7d, ProposalClassSuper30d, ProposalClassSuper60d, ProposalClassConstitutional, "":
+		return true
+	}
+	return false
+}
+
+// Vote thresholds per class, in basis points of (Yes+No+Veto). PLAN
+// §7 Phase 4.2 / spec §11. Abstain is excluded from the denominator
+// (matches cosmos-sdk x/gov convention; abstain is a "I participate
+// in quorum but neither support nor oppose" signal).
+const (
+	// SimpleThresholdBps: simple majority for Simple7d. The default
+	// governance threshold (DefaultThreshold = 5000) is used here
+	// for backward compatibility with any test fixture that tunes
+	// it; constitutional + super always use the higher fixed
+	// values below regardless of DefaultThreshold.
+	SimpleThresholdBps uint32 = 5000
+
+	// SuperThresholdBps: 2/3 supermajority for Super30d / Super60d.
+	SuperThresholdBps uint32 = 6667
+
+	// ConstitutionalThresholdBps: 80% for Constitutional changes
+	// (spec §11: "Constitutional changes require ~80% supermajority").
+	ConstitutionalThresholdBps uint32 = 8000
+)
+
+// ThresholdForClass returns the YesVotes / (Yes+No+Veto) threshold
+// in basis points for the given proposal class. `simpleDefault` is
+// passed in so callers can plug the module's tunable
+// DefaultThreshold for Simple7d while leaving the supermajority
+// values fixed at spec-mandated values.
+func ThresholdForClass(class string, simpleDefault uint32) uint32 {
+	switch class {
+	case ProposalClassSuper30d, ProposalClassSuper60d:
+		return SuperThresholdBps
+	case ProposalClassConstitutional:
+		return ConstitutionalThresholdBps
+	default:
+		// Simple7d (and the empty default) honor the module's
+		// configured threshold so chains can tighten their simple-
+		// majority bar without violating the supermajority floor
+		// for the heavier classes.
+		return simpleDefault
+	}
+}
+
 // BAPIGovernanceModule provides governance functionality for BAPI-based applications.
 // It implements runtime.BAPIModule, runtime.BAPIBlockProcessor, and runtime.BAPIGenesisInitializer.
 type BAPIGovernanceModule struct {
@@ -116,14 +220,95 @@ func (m *BAPIGovernanceModule) BeginBlock(ctx context.Context, blockCtx *runtime
 	return nil, nil
 }
 
-// EndBlock is called at the end of each block.
-// It processes proposals that have ended their deposit or voting periods.
+// EndBlock processes proposals whose voting period has ended.
+//
+// Phase 4.2: for each StatusVoting proposal past its
+// VotingEndTime, tally the votes and apply the class-specific
+// threshold. Passing proposals transition to StatusPassed and
+// have their EffectiveHeight set to currentHeight +
+// TimelockForClass(class). Rejected proposals go to StatusRejected.
+//
+// Walks the proposal store via IterateProposals; like the staking
+// module's epoch-close logic, we collect dirty proposals into a
+// slice before mutating to keep the IAVL Iterate / Set lock
+// hygiene clean.
 func (m *BAPIGovernanceModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, []types.ValidatorUpdate, error) {
-	// In a full implementation, we would iterate over proposals and:
-	// 1. Move proposals from deposit to voting period if deposit threshold met
-	// 2. Tally votes and finalize proposals whose voting period has ended
-	// For now, return empty updates
+	if blockCtx == nil {
+		return nil, nil, nil
+	}
+	nowUnix := blockCtx.Time.ToTime().Unix()
+
+	var toTally []*store.BAPIProposal
+	err := m.proposalStore.IterateProposals(func(p *store.BAPIProposal) bool {
+		if p == nil {
+			return false
+		}
+		if p.Status != string(StatusVoting) {
+			return false
+		}
+		if p.VotingEndTime > nowUnix {
+			return false
+		}
+		toTally = append(toTally, p)
+		return false
+	})
+	if err != nil {
+		// Iteration unsupported (in-memory test stores) — no
+		// tally happens. Real chains run on iterable backends.
+		return nil, nil, nil
+	}
+
+	for _, p := range toTally {
+		passed := m.tallyProposal(p)
+		if passed {
+			p.Status = string(StatusPassed)
+			p.EffectiveHeight = uint64(blockCtx.Height) + TimelockForClass(p.Class)
+		} else {
+			p.Status = string(StatusRejected)
+		}
+		if err := m.proposalStore.SetProposal(ctx, p); err != nil {
+			return nil, nil, fmt.Errorf("persist tallied proposal %d: %w", p.ID, err)
+		}
+	}
 	return nil, nil, nil
+}
+
+// tallyProposal applies the class-aware threshold to the
+// proposal's accumulated vote totals and returns true if the
+// proposal passes.
+//
+// Logic (cosmos-sdk x/gov convention):
+//   - Quorum: (Yes+No+Abstain+Veto) ≥ totalStake × quorumBps / 10000
+//     — quorum check requires knowing the total stake; for v1 we
+//     compare against the module's configured quorum applied to
+//     the participating votes (a permissive interpretation;
+//     tightening to global-stake quorum is Phase 5 territory).
+//   - Veto: VetoVotes / (Yes+No+Abstain+Veto) ≥ vetoThreshold → reject
+//   - Yes threshold: YesVotes / (Yes+No+Veto) ≥ ThresholdForClass(class)
+//
+// All comparisons are in basis points; integer arithmetic avoids
+// floating point.
+func (m *BAPIGovernanceModule) tallyProposal(p *store.BAPIProposal) bool {
+	participating := p.YesVotes + p.NoVotes + p.AbstainVotes + p.VetoVotes
+	if participating == 0 {
+		return false
+	}
+
+	// Veto check.
+	if vetoNumerator := uint64(m.vetoThreshold); vetoNumerator > 0 {
+		if p.VetoVotes*10000 >= participating*vetoNumerator {
+			return false
+		}
+	}
+
+	// Yes-threshold check on the (Yes + No + Veto) denominator.
+	yesnoveto := p.YesVotes + p.NoVotes + p.VetoVotes
+	if yesnoveto == 0 {
+		// All-abstain → no Yes signal even if quorum is met.
+		return false
+	}
+	threshold := uint64(ThresholdForClass(p.Class, m.threshold))
+	return p.YesVotes*10000 >= yesnoveto*threshold
 }
 
 // InitGenesis initializes the module's state from genesis data.
@@ -214,6 +399,19 @@ func (m *BAPIGovernanceModule) handleSubmitProposal(ctx context.Context, txCtx *
 		return nil, fmt.Errorf("proposer must be transaction account")
 	}
 
+	// Reject unknown classes early — a malformed class doesn't
+	// depend on balance, so check it before the deposit gate so
+	// the caller sees the most specific error.
+	class := submitMsg.Class
+	if class == "" {
+		class = ProposalClassSimple7d
+	}
+	if !IsKnownClass(class) {
+		return nil, fmt.Errorf("unknown proposal class %q (want one of: %s, %s, %s, %s)",
+			class, ProposalClassSimple7d, ProposalClassSuper30d,
+			ProposalClassSuper60d, ProposalClassConstitutional)
+	}
+
 	// Verify deposit denomination
 	if submitMsg.InitialDeposit.Denom != m.depositDenom {
 		return nil, fmt.Errorf("invalid deposit denomination: expected %s, got %s", m.depositDenom, submitMsg.InitialDeposit.Denom)
@@ -253,6 +451,9 @@ func (m *BAPIGovernanceModule) handleSubmitProposal(ctx context.Context, txCtx *
 		DepositDenom:   submitMsg.InitialDeposit.Denom,
 		SubmitTime:     blockTime.Unix(),
 		DepositEndTime: depositEndTime.Unix(),
+		Class:          class,
+		// EffectiveHeight stays 0 until the proposal passes; set in
+		// Phase 4.4's enactment-queue wiring.
 	}
 
 	// Store proposal

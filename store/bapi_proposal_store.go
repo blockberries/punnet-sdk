@@ -58,6 +58,24 @@ type BAPIProposal struct {
 
 	// VetoVotes is the total voting power that voted no with veto.
 	VetoVotes uint64 `cramberry:"16"`
+
+	// Class is the proposal class, which drives both the vote
+	// threshold and the post-pass timelock duration:
+	//
+	//   "simple_7d"       : simple majority, 7-day timelock
+	//   "super_30d"       : ≥2/3 supermajority, 30-day timelock
+	//   "super_60d"       : ≥2/3 supermajority, 60-day timelock
+	//   "constitutional"  : ≥80% supermajority, 60-day timelock
+	//
+	// Defaults to "simple_7d" when unset (round-tripped from older
+	// proposals without the field). PLAN §7 Phase 4.1; spec §11.
+	Class string `cramberry:"17"`
+
+	// EffectiveHeight is the block height at which a passed proposal
+	// is enacted. Computed at vote-end as
+	// `voting_end_height + timelock(class)`. Zero until the
+	// proposal passes; consumed by the enactment queue in Phase 4.4.
+	EffectiveHeight uint64 `cramberry:"18"`
 }
 
 // SubmitTimeAsTime returns the submit time as a time.Time.
