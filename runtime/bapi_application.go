@@ -653,6 +653,7 @@ func (a *BAPIApplication) executeTx(ctx context.Context, blockCtx *BAPIBlockCont
 		BAPIBlockContext: blockCtx,
 		Account:          ptx.Account,
 		TxIndex:          index,
+		TxBytes:          tx,
 	}
 
 	// Collect effects from all messages
@@ -1222,6 +1223,14 @@ type BAPITxContext struct {
 	*BAPIBlockContext
 	Account ptypes.AccountName
 	TxIndex uint32
+
+	// TxBytes is the raw wire-encoded transaction this execution is
+	// processing. Populated by executeTx before AnteHandlers and
+	// message handlers run. Provided so AnteHandlers (e.g. the fees
+	// module's byte-fee enforcer) can measure the on-wire transaction
+	// size without re-marshaling. Length-only consumers should read
+	// len(TxBytes); the slice itself MUST be treated as read-only.
+	TxBytes []byte
 }
 
 // BAPIGenesisState represents the genesis app state structure.
