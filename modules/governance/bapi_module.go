@@ -163,6 +163,37 @@ type BAPIGovernanceModule struct {
 	// before applying a proposal-driven parameter change.
 	// PLAN §7 Phase 4.3.
 	Parameters *ParameterRegistry
+
+	// parameterTargets maps a target-module name to the module
+	// instance that implements BAPIModuleParams for that name.
+	// Populated via RegisterParameterTarget; consulted by the
+	// enactment hook to dispatch ApplyParameterChange.
+	parameterTargets map[string]runtime.BAPIModuleParams
+}
+
+// RegisterParameterTarget associates `moduleName` with a module
+// that implements BAPIModuleParams. The chain operator (or the
+// runtime, on apps that want auto-discovery) calls this at module
+// construction time. ProposalChange entries with the same
+// TargetModule string will dispatch to `m` during enactment.
+//
+// Returns an error if `moduleName` is empty or already registered.
+// PLAN §7 Phase 4.4.
+func (m *BAPIGovernanceModule) RegisterParameterTarget(moduleName string, target runtime.BAPIModuleParams) error {
+	if moduleName == "" {
+		return fmt.Errorf("module name cannot be empty")
+	}
+	if target == nil {
+		return fmt.Errorf("target cannot be nil")
+	}
+	if m.parameterTargets == nil {
+		m.parameterTargets = make(map[string]runtime.BAPIModuleParams)
+	}
+	if _, exists := m.parameterTargets[moduleName]; exists {
+		return fmt.Errorf("module %q already registered", moduleName)
+	}
+	m.parameterTargets[moduleName] = target
+	return nil
 }
 
 // NewBAPIGovernanceModule creates a new BAPI governance module with the given stores.
@@ -278,7 +309,79 @@ func (m *BAPIGovernanceModule) EndBlock(ctx context.Context, blockCtx *runtime.B
 			return nil, nil, fmt.Errorf("persist tallied proposal %d: %w", p.ID, err)
 		}
 	}
+
+	// Phase 4.4: enactment. Walk passed proposals whose
+	// EffectiveHeight has been reached and dispatch each one's
+	// Changes to the target module's BAPIModuleParams hook.
+	var toEnact []*store.BAPIProposal
+	if err := m.proposalStore.IterateProposals(func(p *store.BAPIProposal) bool {
+		if p == nil {
+			return false
+		}
+		if p.Status != string(StatusPassed) {
+			return false
+		}
+		if p.EffectiveHeight == 0 || p.EffectiveHeight > uint64(blockCtx.Height) {
+			return false
+		}
+		toEnact = append(toEnact, p)
+		return false
+	}); err != nil {
+		return nil, nil, nil
+	}
+
+	for _, p := range toEnact {
+		if err := m.enactProposal(ctx, p); err != nil {
+			p.Status = string(StatusEnactmentFailed)
+		} else {
+			p.Status = string(StatusEnacted)
+		}
+		if persistErr := m.proposalStore.SetProposal(ctx, p); persistErr != nil {
+			return nil, nil, fmt.Errorf("persist enacted proposal %d: %w", p.ID, persistErr)
+		}
+	}
 	return nil, nil, nil
+}
+
+// enactProposal applies all of a proposal's Changes atomically:
+// every change is validated against the parameter registry's
+// class-specific band first; if any change fails validation the
+// whole proposal aborts (none applied). Then each change is
+// dispatched to its target module's ApplyParameterChange. If any
+// dispatch returns an error, the proposal is marked
+// StatusEnactmentFailed — but earlier changes in the same
+// proposal have already taken effect, which is the v1 limitation
+// noted in Phase 4.6 "bundled atomicity" follow-up.
+//
+// For now, single-change proposals are the safe case. Bundled
+// proposals need either two-phase commit (snapshot module state +
+// rollback on failure) or per-module dry-run validation. Phase 4.6
+// will tighten this.
+func (m *BAPIGovernanceModule) enactProposal(ctx context.Context, p *store.BAPIProposal) error {
+	if len(p.Changes) == 0 {
+		// Text-only proposal — no enactment needed. Treat as success.
+		return nil
+	}
+	// Pre-validate every change against the band registry.
+	if m.Parameters != nil {
+		for i, c := range p.Changes {
+			if err := m.Parameters.ValidateChange(p.Class, c.ParameterName, c.NewValueInt); err != nil {
+				return fmt.Errorf("proposal %d change %d band-validation: %w", p.ID, i, err)
+			}
+		}
+	}
+	// Dispatch each change.
+	for i, c := range p.Changes {
+		target, ok := m.parameterTargets[c.TargetModule]
+		if !ok {
+			return fmt.Errorf("proposal %d change %d: target module %q not registered", p.ID, i, c.TargetModule)
+		}
+		if err := target.ApplyParameterChange(ctx, c.ParameterName, c.NewValueInt); err != nil {
+			return fmt.Errorf("proposal %d change %d (%s.%s): %w",
+				p.ID, i, c.TargetModule, c.ParameterName, err)
+		}
+	}
+	return nil
 }
 
 // tallyProposal applies the class-aware threshold to the

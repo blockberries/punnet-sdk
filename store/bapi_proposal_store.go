@@ -76,6 +76,27 @@ type BAPIProposal struct {
 	// `voting_end_height + timelock(class)`. Zero until the
 	// proposal passes; consumed by the enactment queue in Phase 4.4.
 	EffectiveHeight uint64 `cramberry:"18"`
+
+	// Changes lists the parameter changes the proposal would
+	// apply at EffectiveHeight. Each entry names a target module
+	// + parameter + new value. Bundled proposals carry multiple
+	// changes that apply atomically (Phase 4.6). PLAN §7 Phase 4.4.
+	Changes []ProposalChange `cramberry:"19"`
+}
+
+// ProposalChange is one parameter modification carried by a
+// governance proposal. The enactment hook (Phase 4.4) resolves
+// TargetModule to a module that implements BAPIModuleParams and
+// calls ApplyParameterChange with the supplied ParameterName +
+// NewValueInt.
+//
+// Only integer-typed parameters are representable in v1. Future
+// expansion will add a byte-slice value field for arbitrary
+// payloads (fee schedules, allowlists, etc.).
+type ProposalChange struct {
+	TargetModule  string `cramberry:"1"`
+	ParameterName string `cramberry:"2"`
+	NewValueInt   int64  `cramberry:"3"`
 }
 
 // SubmitTimeAsTime returns the submit time as a time.Time.

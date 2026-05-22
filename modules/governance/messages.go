@@ -54,6 +54,17 @@ const (
 
 	// StatusFailed indicates the proposal failed due to lack of quorum.
 	StatusFailed ProposalStatus = "failed"
+
+	// StatusEnacted indicates the proposal has been applied. Set
+	// by the enactment hook (Phase 4.4) at EffectiveHeight when
+	// the target module's ApplyParameterChange returned nil.
+	StatusEnacted ProposalStatus = "enacted"
+
+	// StatusEnactmentFailed indicates the proposal passed but its
+	// changes failed to apply at EffectiveHeight (e.g. band
+	// validation failed, target module rejected the change). The
+	// post-pass status is sticky: the chain doesn't retry.
+	StatusEnactmentFailed ProposalStatus = "enactment_failed"
 )
 
 // VoteOption represents a voting option.

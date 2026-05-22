@@ -71,6 +71,26 @@ type BAPIGenesisExporter interface {
 	ExportGenesis(ctx context.Context) ([]byte, error)
 }
 
+// BAPIModuleParams is the optional hook for modules whose parameters
+// can be changed via governance proposals. The governance module's
+// enactment loop (PLAN §7 Phase 4.4) walks every passed-and-due
+// proposal at EndBlock, looks up each change's TargetModule, and
+// invokes ApplyParameterChange.
+//
+// Modules typically register their parameter names with the
+// governance ParameterRegistry at construction time. The registry
+// gates the value against the proposal's class-specific band
+// BEFORE this hook fires, so handlers only need to validate
+// module-specific structural invariants (cross-parameter
+// constraints, deferred state migrations, etc.).
+//
+// Returning an error from ApplyParameterChange marks the proposal
+// as StatusEnactmentFailed (sticky — the chain does not retry).
+type BAPIModuleParams interface {
+	BAPIModule
+	ApplyParameterChange(ctx context.Context, name string, newValue int64) error
+}
+
 // BAPIMempoolObserver is the optional hook for modules that consume
 // the bapi.MempoolObserver events. The BAPIApplication implements
 // bapi.MempoolObserver itself (declared via CapMempoolObserver in the
