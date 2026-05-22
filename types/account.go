@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"time"
@@ -81,11 +82,12 @@ type Authority struct {
 	AccountWeights map[AccountName]uint64 `json:"account_weights"`
 }
 
-// NewAuthority creates a new authority with a single key
+// NewAuthority creates a new authority with a single key.
+// The pubKey is stored as a hex-encoded string in KeyWeights.
 func NewAuthority(threshold uint64, pubKey []byte, weight uint64) Authority {
 	return Authority{
 		Threshold:      threshold,
-		KeyWeights:     map[string]uint64{string(pubKey): weight},
+		KeyWeights:     map[string]uint64{hex.EncodeToString(pubKey): weight},
 		AccountWeights: make(map[AccountName]uint64),
 	}
 }
@@ -128,14 +130,25 @@ func (a Authority) ValidateBasic() error {
 	return nil
 }
 
-// HasKey checks if a public key is in the authority
+// HasKey checks if a public key is in the authority.
+// It checks both hex-encoded and raw byte string representations for compatibility.
 func (a Authority) HasKey(pubKey []byte) bool {
+	hexKey := hex.EncodeToString(pubKey)
+	if _, ok := a.KeyWeights[hexKey]; ok {
+		return true
+	}
+	// Fallback: check raw bytes (for backward compatibility with NewAuthority callers)
 	_, ok := a.KeyWeights[string(pubKey)]
 	return ok
 }
 
-// GetKeyWeight returns the weight of a public key
+// GetKeyWeight returns the weight of a public key.
+// It checks both hex-encoded and raw byte string representations for compatibility.
 func (a Authority) GetKeyWeight(pubKey []byte) uint64 {
+	hexKey := hex.EncodeToString(pubKey)
+	if w, ok := a.KeyWeights[hexKey]; ok {
+		return w
+	}
 	return a.KeyWeights[string(pubKey)]
 }
 
