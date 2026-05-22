@@ -90,12 +90,38 @@ type BAPIActiveSetEntry struct {
 	Power  uint64 `cramberry:"2"`
 }
 
+// BAPIBootstrapInfo records the vesting state of one bootstrap
+// validator's allocation. Created at genesis from
+// TokenomicsGenesis.BootstrapValidators; consulted by handleUndelegate
+// to block early exits and (Phase 2.5) by EndBlock to release the
+// per-block vested share.
+//
+//   - LockedAmount: the initial BL share assigned to this validator
+//     at genesis. Equals AllocPctBootstrap × TotalSupply ÷
+//     len(BootstrapValidators) plus the rounding remainder
+//     distributed to the first validator.
+//   - VestStartHeight: the chain height at which vesting begins
+//     (genesis_height + BootstrapLockBlocks).
+//   - VestedAmount: the cumulative amount released so far. Bumped
+//     by EndBlock during the vesting window; reaches LockedAmount
+//     after VestStartHeight + BootstrapVestBlocks.
+//
+// Keyed by hex pubkey under "bootstrap/" so the bootstrap-validator
+// set is iterable for per-block vesting.
+type BAPIBootstrapInfo struct {
+	PubKey          []byte `cramberry:"1"`
+	LockedAmount    uint64 `cramberry:"2"`
+	VestStartHeight uint64 `cramberry:"3"`
+	VestedAmount    uint64 `cramberry:"4"`
+}
+
 // BAPIValidatorStore provides typed access to validator data.
 type BAPIValidatorStore struct {
 	validators  *TypedStore[*BAPIValidator]
 	delegations *TypedStore[*BAPIDelegation]
 	unbondings  *TypedStore[*BAPIUnbondingEntry]
 	activeSet   *TypedStore[*BAPIActiveSetEntry]
+	bootstrap   *TypedStore[*BAPIBootstrapInfo]
 }
 
 // NewBAPIValidatorStore creates a new validator store backed by blockberry's StateStore.
@@ -105,6 +131,7 @@ func NewBAPIValidatorStore(store statestore.StateStore) *BAPIValidatorStore {
 		delegations: NewTypedStore[*BAPIDelegation](store, "delegations/"),
 		unbondings:  NewTypedStore[*BAPIUnbondingEntry](store, "unbondings/"),
 		activeSet:   NewTypedStore[*BAPIActiveSetEntry](store, "active_set/"),
+		bootstrap:   NewTypedStore[*BAPIBootstrapInfo](store, "bootstrap/"),
 	}
 }
 
@@ -453,4 +480,38 @@ func (s *BAPIValidatorStore) DeleteActiveSetEntry(ctx context.Context, pubKey []
 		return fmt.Errorf("pubkey empty")
 	}
 	return s.activeSet.Delete(ctx, hex.EncodeToString(pubKey))
+}
+
+// SetBootstrapInfo persists one bootstrap validator's vesting record.
+// Called at InitGenesis for every TokenomicsGenesis.BootstrapValidators
+// entry; called again by Phase 2.5's EndBlock to advance VestedAmount.
+func (s *BAPIValidatorStore) SetBootstrapInfo(ctx context.Context, info *BAPIBootstrapInfo) error {
+	if info == nil {
+		return fmt.Errorf("info is nil")
+	}
+	if len(info.PubKey) == 0 {
+		return fmt.Errorf("pubkey empty")
+	}
+	return s.bootstrap.Set(ctx, hex.EncodeToString(info.PubKey), info)
+}
+
+// GetBootstrapInfo returns the bootstrap-validator vesting record
+// for `pubKey`, or nil + ErrNotFound when the validator was never a
+// bootstrap validator.
+func (s *BAPIValidatorStore) GetBootstrapInfo(ctx context.Context, pubKey []byte) (*BAPIBootstrapInfo, error) {
+	if len(pubKey) == 0 {
+		return nil, fmt.Errorf("pubkey empty")
+	}
+	return s.bootstrap.Get(ctx, hex.EncodeToString(pubKey))
+}
+
+// IterateBootstrapInfos walks every bootstrap validator's record,
+// invoking fn for each. Used by Phase 2.5's EndBlock vesting loop.
+func (s *BAPIValidatorStore) IterateBootstrapInfos(fn func(info *BAPIBootstrapInfo) bool) error {
+	return s.bootstrap.IterateRelative(func(_ string, info *BAPIBootstrapInfo) bool {
+		if info == nil {
+			return false
+		}
+		return fn(info)
+	})
 }

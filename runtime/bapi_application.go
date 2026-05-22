@@ -891,6 +891,23 @@ func (a *BAPIApplication) initGenesis(ctx context.Context, genesis *types.Genesi
 		}
 	}
 
+	// Phase 2.4: seed bootstrap-validator vesting state on any module
+	// that opts in (the staking module). The runtime computes the
+	// per-validator share and vest-start once from TokenomicsGenesis
+	// so every module that needs the info sees identical inputs.
+	if a.tokenomicsGenesis != nil && len(a.tokenomicsGenesis.BootstrapValidators) > 0 {
+		_, _, _, _, blTotal := a.tokenomicsGenesis.InitialAllocations()
+		perVal := blTotal / uint64(len(a.tokenomicsGenesis.BootstrapValidators))
+		vestStart := uint64(genesis.InitialHeight) + BootstrapLockBlocks
+		for _, mod := range sortedModules {
+			if seeder, ok := mod.(BAPIBootstrapInitializer); ok {
+				if err := seeder.SeedBootstrapValidators(ctx, a.tokenomicsGenesis.BootstrapValidators, perVal, vestStart); err != nil {
+					return fmt.Errorf("seed bootstrap validators for %s: %w", mod.Name(), err)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

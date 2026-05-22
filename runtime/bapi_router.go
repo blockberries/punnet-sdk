@@ -71,6 +71,23 @@ type BAPIGenesisExporter interface {
 	ExportGenesis(ctx context.Context) ([]byte, error)
 }
 
+// BAPIBootstrapInitializer is the optional hook for modules that need
+// to seed state from `TokenomicsGenesis.BootstrapValidators`. The
+// runtime invokes it once per module after the regular InitGenesis
+// loop, passing the per-validator BL share and the chain-wide
+// vest-start height (genesis_height + BootstrapLockBlocks). Used by
+// the staking module to create per-validator BootstrapInfo records
+// and self-delegations under D17 / D22 (PLAN §7 Phase 2.4).
+//
+// Modules without bootstrap state simply don't implement this; the
+// runtime skips them. Chains without bootstrap validators (empty
+// TokenomicsGenesis.BootstrapValidators) also skip the call entirely
+// regardless of which modules implement the interface.
+type BAPIBootstrapInitializer interface {
+	BAPIModule
+	SeedBootstrapValidators(ctx context.Context, validators []BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error
+}
+
 // BAPIParamsUpdater is implemented by modules that can change consensus
 // params during a block — e.g. a governance module enacting a passed
 // proposal. The runtime walks all such modules at EndBlock (in

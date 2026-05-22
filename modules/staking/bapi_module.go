@@ -550,6 +550,75 @@ func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error 
 	return nil
 }
 
+// SeedBootstrapValidators implements runtime.BAPIBootstrapInitializer.
+//
+// Creates per-bootstrap-validator state at genesis: the validator
+// record (Power = perValidatorShare, Commission pinned to
+// BootstrapCommission = 500), the self-delegation, the active-set
+// entry, and the BootstrapInfo vesting record. Called by the runtime
+// after the regular InitGenesis loop when
+// TokenomicsGenesis.BootstrapValidators is non-empty. PLAN §7 Phase
+// 2.4 / D17, D22.
+//
+// The validator account itself is NOT debited the perValidatorShare
+// — those tokens were seeded into module.bl at the protocol-account
+// step. Phase 2.5 wires the per-block release from module.bl to the
+// staking pool as the lock expires.
+func (m *BAPIStakingModule) SeedBootstrapValidators(ctx context.Context, validators []runtime.BootstrapValidator, perValidatorShare uint64, vestStartHeight uint64) error {
+	if m == nil || m.validatorStore == nil {
+		return fmt.Errorf("module or store is nil")
+	}
+	for _, bv := range validators {
+		if !bv.Name.IsValid() {
+			return fmt.Errorf("invalid bootstrap validator name %q", bv.Name)
+		}
+		if len(bv.PubKey) != 32 {
+			return fmt.Errorf("bootstrap validator %q: pubkey length %d != 32", bv.Name, len(bv.PubKey))
+		}
+
+		validator := &store.BAPIValidator{
+			PubKey: types.PublicKey{
+				Type: types.KeyTypeEd25519,
+				Data: append([]byte(nil), bv.PubKey...),
+			},
+			Power:           perValidatorShare,
+			Jailed:          false,
+			Description:     string(bv.Name),
+			Commission:      uint32(runtime.BootstrapCommission),
+			TotalDelegation: perValidatorShare,
+		}
+		if err := m.validatorStore.SetValidator(ctx, validator); err != nil {
+			return fmt.Errorf("set bootstrap validator: %w", err)
+		}
+
+		delegation := &store.BAPIDelegation{
+			Delegator:       string(bv.Name),
+			ValidatorPubKey: hex.EncodeToString(bv.PubKey),
+			Amount:          perValidatorShare,
+		}
+		if err := m.validatorStore.SetDelegation(ctx, delegation); err != nil {
+			return fmt.Errorf("set bootstrap self-delegation: %w", err)
+		}
+
+		if err := m.validatorStore.SetActiveSetEntry(ctx, &store.BAPIActiveSetEntry{
+			PubKey: append([]byte(nil), bv.PubKey...),
+			Power:  perValidatorShare,
+		}); err != nil {
+			return fmt.Errorf("seed bootstrap active set entry: %w", err)
+		}
+
+		if err := m.validatorStore.SetBootstrapInfo(ctx, &store.BAPIBootstrapInfo{
+			PubKey:          append([]byte(nil), bv.PubKey...),
+			LockedAmount:    perValidatorShare,
+			VestStartHeight: vestStartHeight,
+			VestedAmount:    0,
+		}); err != nil {
+			return fmt.Errorf("set bootstrap info: %w", err)
+		}
+	}
+	return nil
+}
+
 // ExportGenesis exports the module's state for genesis.
 //
 // Walks every validator currently in the store via the IterateValidators
@@ -815,6 +884,21 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 	if validator.TotalDelegation < undelegateMsg.Amount.Amount {
 		return nil, fmt.Errorf("validator TotalDelegation underflow (have %d, want %d)",
 			validator.TotalDelegation, undelegateMsg.Amount.Amount)
+	}
+
+	// Phase 2.4: bootstrap-validator self-undelegate pre-maturity check.
+	// A bootstrap validator's own self-delegation is locked for
+	// BootstrapLockBlocks; any attempt to withdraw it before
+	// VestStartHeight is rejected. Non-self delegators (third parties
+	// who delegated to a bootstrap validator) and bootstrap validators
+	// undelegating after vest start are unaffected here — Phase 2.5
+	// gates the partial-vest case.
+	if bi, biErr := m.validatorStore.GetBootstrapInfo(ctx, undelegateMsg.Validator); biErr == nil && bi != nil {
+		isSelfUndelegate := string(undelegateMsg.Delegator) == validator.Description
+		if isSelfUndelegate && uint64(txCtx.Height) < bi.VestStartHeight {
+			return nil, fmt.Errorf("bootstrap validator %s: self-delegation locked until height %d (current %d)",
+				undelegateMsg.Delegator, bi.VestStartHeight, txCtx.Height)
+		}
 	}
 
 	updatedDelegation := &store.BAPIDelegation{
