@@ -52,10 +52,36 @@ type BAPIDelegation struct {
 	Amount uint64 `cramberry:"3"`
 }
 
+// BAPIUnbondingEntry is one row in the unbonding queue. Each
+// MsgUndelegate splits the delegator's stake from the validator
+// pool and parks it in an entry that matures at MaturityHeight; on
+// the first EndBlock with Height >= MaturityHeight the staking
+// module transfers the tokens from "staking.pool" back to the
+// delegator and deletes the row.
+//
+// MaturityHeight defaults to currentHeight + UnbondingPeriodBlocks
+// (spec §4 — 21 days). The maturity is computed at undelegate time
+// and never re-evaluated, so a later parameter change does not
+// affect entries already in the queue.
+//
+// Seq distinguishes multiple unbondings that share a maturity
+// height (same block, same delegator+validator) so the typed-store
+// key is unique. It is a monotonic counter per BAPIValidatorStore
+// instance; the value is consensus-irrelevant because the store
+// key only needs uniqueness within a height.
+type BAPIUnbondingEntry struct {
+	Delegator       string `cramberry:"1"`
+	ValidatorPubKey string `cramberry:"2"`
+	Amount          uint64 `cramberry:"3"`
+	MaturityHeight  uint64 `cramberry:"4"`
+	Seq             uint64 `cramberry:"5"`
+}
+
 // BAPIValidatorStore provides typed access to validator data.
 type BAPIValidatorStore struct {
 	validators  *TypedStore[*BAPIValidator]
 	delegations *TypedStore[*BAPIDelegation]
+	unbondings  *TypedStore[*BAPIUnbondingEntry]
 }
 
 // NewBAPIValidatorStore creates a new validator store backed by blockberry's StateStore.
@@ -63,6 +89,7 @@ func NewBAPIValidatorStore(store statestore.StateStore) *BAPIValidatorStore {
 	return &BAPIValidatorStore{
 		validators:  NewTypedStore[*BAPIValidator](store, "validators/"),
 		delegations: NewTypedStore[*BAPIDelegation](store, "delegations/"),
+		unbondings:  NewTypedStore[*BAPIUnbondingEntry](store, "unbondings/"),
 	}
 }
 
@@ -304,5 +331,68 @@ func (s *BAPIValidatorStore) GetValidatorAtHeight(ctx context.Context, pubKey []
 func (s *BAPIValidatorStore) IterateValidators(fn func(v *BAPIValidator) bool) error {
 	return s.validators.IterateRelative(func(_ string, v *BAPIValidator) bool {
 		return fn(v)
+	})
+}
+
+// unbondingKey is the typed-store key for an unbonding entry. The
+// format is `<paddedHeight>/<seq>` so lexical iteration order
+// matches numeric maturity-height order — EndBlock can scan from
+// the start and stop on the first entry whose height exceeds the
+// current block height.
+//
+// 20 digits for height covers uint64.Max; 20 for seq is overkill
+// but cheap and keeps the format uniform.
+func unbondingKey(maturityHeight, seq uint64) string {
+	return fmt.Sprintf("%020d/%020d", maturityHeight, seq)
+}
+
+// AddUnbondingEntry persists a new unbonding entry. Called by
+// MsgUndelegate after the delegation record has been decremented;
+// the entry remains in the queue until EndBlock at MaturityHeight
+// dequeues it.
+func (s *BAPIValidatorStore) AddUnbondingEntry(ctx context.Context, entry *BAPIUnbondingEntry) error {
+	if entry == nil {
+		return fmt.Errorf("entry is nil")
+	}
+	if entry.Delegator == "" {
+		return fmt.Errorf("delegator empty")
+	}
+	if entry.ValidatorPubKey == "" {
+		return fmt.Errorf("validator_pub_key empty")
+	}
+	if entry.Amount == 0 {
+		return fmt.Errorf("amount must be > 0")
+	}
+	return s.unbondings.Set(ctx, unbondingKey(entry.MaturityHeight, entry.Seq), entry)
+}
+
+// DeleteUnbondingEntry removes a single unbonding entry by its
+// (maturity, seq) identifier. Used by EndBlock after the matured
+// transfer is emitted.
+func (s *BAPIValidatorStore) DeleteUnbondingEntry(ctx context.Context, maturityHeight, seq uint64) error {
+	return s.unbondings.Delete(ctx, unbondingKey(maturityHeight, seq))
+}
+
+// IterateMaturedUnbondings walks every unbonding entry with
+// MaturityHeight ≤ currentHeight, invoking fn for each. Return
+// true from fn to stop early. Walks in ascending-height order
+// because the key format is height-padded.
+//
+// Stops scanning as soon as it sees an entry beyond the current
+// height, so the cost is O(matured + 1) rather than O(all).
+func (s *BAPIValidatorStore) IterateMaturedUnbondings(currentHeight uint64, fn func(e *BAPIUnbondingEntry) bool) error {
+	stopped := false
+	return s.unbondings.IterateRelative(func(_ string, e *BAPIUnbondingEntry) bool {
+		if stopped {
+			return true
+		}
+		if e == nil {
+			return false
+		}
+		if e.MaturityHeight > currentHeight {
+			stopped = true
+			return true
+		}
+		return fn(e)
 	})
 }

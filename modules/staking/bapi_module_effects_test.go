@@ -138,10 +138,17 @@ func TestHandleUndelegate_DelegationDecrementsAfterExecute(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint64(300), post.Amount, "delegation must drop from 500 to 300 after executing effects")
 
-	// And alice's balance must include the 200 stake from the pool.
+	// Phase 2.1: alice does NOT receive the tokens immediately —
+	// they're parked in the unbonding queue and refunded by
+	// EndBlock at maturity (currentHeight + UnbondingPeriodBlocks).
 	bal, err := balanceStore.GetAmount(ctx, "alice", "stake")
 	require.NoError(t, err)
-	assert.Equal(t, uint64(200), bal)
+	assert.Equal(t, uint64(0), bal, "tokens stay in staking.pool until maturity")
+
+	// The pool balance is unchanged for the same reason.
+	pool, err := balanceStore.GetAmount(ctx, "staking.pool", "stake")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1000), pool, "staking.pool unchanged during unbonding period")
 }
 
 // TestHandleUndelegate_RepeatedUndelegateIsRejected pins down the consequence

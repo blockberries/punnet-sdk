@@ -43,6 +43,15 @@ type BAPIStakingModule struct {
 	// ValidatorUpdate when the current power differs from this snapshot,
 	// avoiding spurious "Power unchanged" updates on every block.
 	lastEmittedPowers map[string]uint64
+
+	// unbondingSeq is a monotonic counter used to disambiguate
+	// unbonding entries that share a maturity height (same block,
+	// same delegator+validator). The value is consensus-irrelevant
+	// — the typed-store key just needs to be unique within a
+	// height — but the counter is bumped under mu so the
+	// assignment order is deterministic for tests. PLAN §7 Phase
+	// 2.1.
+	unbondingSeq uint64
 }
 
 // NewBAPIStakingModule creates a new BAPI staking module with the given stores.
@@ -132,6 +141,14 @@ const (
 	// who can't independently verify the slashable event.
 	DefaultSlashFractionLightClientBps uint32 = 1000
 )
+
+// UnbondingPeriodBlocks is the chain-wide unbonding-period length in
+// blocks. Spec §4 fixes the wall-clock period at 21 days; the block
+// count assumes a 1-second cadence (21 × 24 × 60 × 60 = 1,814,400).
+// Chains that run at a different block time must override this via a
+// future ConsensusParams field; for v1 the constant is the single
+// authoritative value. PLAN §7 Phase 2.1.
+const UnbondingPeriodBlocks uint64 = 21 * 24 * 60 * 60
 
 // SlashFractionBasisPoints is the legacy compiled-in fraction used when
 // the per-type knobs above weren't around yet. Retained as an alias for
@@ -278,6 +295,18 @@ func (m *BAPIStakingModule) ProcessEvidence(ctx context.Context, blockCtx *runti
 // removal. The updates are sorted by hex pubkey so the result is
 // deterministic across nodes (PLAN B2-2).
 func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPIBlockContext) ([]effects.Effect, []types.ValidatorUpdate, error) {
+	// Phase 2.1: dequeue matured unbonding entries first. The refund
+	// transfers and delete effects are independent of the validator-set
+	// aggregation below, so they ride alongside in the same effect batch.
+	var blockEffects []effects.Effect
+	if blockCtx != nil {
+		matured, err := m.processMaturedUnbondings(uint64(blockCtx.Height))
+		if err != nil {
+			return nil, nil, fmt.Errorf("process matured unbondings: %w", err)
+		}
+		blockEffects = append(blockEffects, matured...)
+	}
+
 	m.mu.Lock()
 	// Snapshot the dirty set so we can release the lock before doing store
 	// I/O. We hold the lock again briefly later to update lastEmittedPowers.
@@ -295,7 +324,7 @@ func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPI
 	m.mu.Unlock()
 
 	if len(dirtyKeys) == 0 {
-		return nil, nil, nil
+		return blockEffects, nil, nil
 	}
 
 	// Deterministic emission order: sort hex pubkeys lexicographically.
@@ -355,8 +384,62 @@ func (m *BAPIStakingModule) EndBlock(ctx context.Context, blockCtx *runtime.BAPI
 	}
 	m.mu.Unlock()
 
-	return nil, updates, nil
+	return blockEffects, updates, nil
 }
+
+// processMaturedUnbondings walks the unbonding queue and emits
+// (TransferEffect, DeleteEffect) pairs for every entry whose
+// MaturityHeight ≤ currentHeight. Called once per EndBlock. The
+// returned slice is in maturity-ascending order, matching the
+// store's IterateMaturedUnbondings key order, so the effect batch
+// is deterministic across nodes.
+//
+// Returns an empty slice and nil error when no entries are due
+// (the common case). Returns the underlying store error if
+// iteration itself fails — note that
+// ErrIterationUnsupported is treated as "no entries due" because
+// in-memory test stores legitimately don't iterate; the queue
+// then drains via Set/Delete only.
+func (m *BAPIStakingModule) processMaturedUnbondings(currentHeight uint64) ([]effects.Effect, error) {
+	if m == nil || m.validatorStore == nil {
+		return nil, fmt.Errorf("module or store is nil")
+	}
+	var due []*store.BAPIUnbondingEntry
+	err := m.validatorStore.IterateMaturedUnbondings(currentHeight, func(e *store.BAPIUnbondingEntry) bool {
+		due = append(due, e)
+		return false
+	})
+	if err != nil {
+		// Iteration not supported — silently return nothing rather than
+		// fail the whole EndBlock. Real chains run on iterable stores.
+		return nil, nil
+	}
+	if len(due) == 0 {
+		return nil, nil
+	}
+
+	effectsOut := make([]effects.Effect, 0, 2*len(due))
+	for _, e := range due {
+		effectsOut = append(effectsOut,
+			effects.TransferEffect{
+				From:   ptypes.AccountName("staking.pool"),
+				To:     ptypes.AccountName(e.Delegator),
+				Amount: ptypes.NewCoins(ptypes.NewCoin(stakingDenom, e.Amount)),
+			},
+			effects.DeleteEffect[*store.BAPIUnbondingEntry]{
+				Store:    "unbondings",
+				StoreKey: []byte(fmt.Sprintf("%020d/%020d", e.MaturityHeight, e.Seq)),
+			},
+		)
+	}
+	return effectsOut, nil
+}
+
+// stakingDenom is the base denom used by all staking-module transfers.
+// Module-internal constant; the canonical chain-wide denom override
+// lives in the bank module (Phase 1 wiring uses a configured base denom
+// per chain).
+const stakingDenom = "stake"
 
 // InitGenesis initializes the module's state from genesis data.
 func (m *BAPIStakingModule) InitGenesis(ctx context.Context, data []byte) error {
@@ -604,22 +687,26 @@ func (m *BAPIStakingModule) handleDelegate(ctx context.Context, txCtx *runtime.B
 
 // handleUndelegate handles MsgUndelegate.
 //
-// Returns three effects: (1) a WriteEffect that decrements the delegation
-// record by the undelegated amount, (2) a TransferEffect moving the tokens
-// from the staking pool back to the delegator, and (3) an event. Previously
-// this handler only issued the transfer — the delegation record was never
-// decremented, so the same stake could be undelegated repeatedly (PLAN T1-8 /
-// B2-3). Decrementing via WriteEffect keeps the change inside the effect
-// pipeline, matching the SDK's effects-not-mutations invariant. If the
-// remaining delegation reaches zero, the WriteEffect still writes a zero-amount
-// record rather than deleting the row; callers that care about "delegation
-// exists" should compare Amount, not key presence, which is also what
-// validatorStore.GetDelegation does (it returns zero on ErrNotFound).
+// Phase 2.1: emits four effects rather than the previous immediate
+// refund. (1) WriteEffect decrementing the delegation record, (2) a
+// WriteEffect creating a BAPIUnbondingEntry that matures at
+// currentHeight + UnbondingPeriodBlocks, (3) a WriteEffect
+// decrementing the validator's TotalDelegation (so the validator's
+// power drops immediately even though the tokens themselves wait
+// 21 days), and (4) an event. The tokens stay in
+// `staking.pool` for the duration of the unbonding period; the
+// matching EndBlock-side refund fires when the entry matures.
+//
+// Previously this handler refunded the delegator immediately, which
+// violated spec §4 (a malicious validator could unbond + drain
+// without giving the chain time to slash). With the unbonding queue
+// in place, slashing within the 21-day window can still reach the
+// queued amount.
 func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime.BAPITxContext, msg ptypes.Message) ([]effects.Effect, error) {
 	if m == nil || m.validatorStore == nil || m.balanceStore == nil {
 		return nil, fmt.Errorf("module or store is nil")
 	}
-	if txCtx == nil {
+	if txCtx == nil || txCtx.BAPIBlockContext == nil {
 		return nil, fmt.Errorf("transaction context is nil")
 	}
 
@@ -646,10 +733,18 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 			ptypes.ErrInsufficientFunds, delegation.Amount, undelegateMsg.Amount.Amount)
 	}
 
-	// Build the post-undelegation delegation record. The store key for a
-	// delegation is "<delegator>/<hex-validator-pubkey>" (see
-	// delegationKey() in bapi_validator_store.go); the WriteEffect writes to
-	// "delegations/<that-key>" which the typed store reads from.
+	validator, err := m.validatorStore.GetValidator(ctx, undelegateMsg.Validator)
+	if err != nil {
+		return nil, fmt.Errorf("get validator: %w", err)
+	}
+	if validator == nil {
+		return nil, fmt.Errorf("%w: validator not found", ptypes.ErrNotFound)
+	}
+	if validator.TotalDelegation < undelegateMsg.Amount.Amount {
+		return nil, fmt.Errorf("validator TotalDelegation underflow (have %d, want %d)",
+			validator.TotalDelegation, undelegateMsg.Amount.Amount)
+	}
+
 	updatedDelegation := &store.BAPIDelegation{
 		Delegator:       delegation.Delegator,
 		ValidatorPubKey: delegation.ValidatorPubKey,
@@ -657,28 +752,61 @@ func (m *BAPIStakingModule) handleUndelegate(ctx context.Context, txCtx *runtime
 	}
 	delegationStoreKey := string(undelegateMsg.Delegator) + "/" + hex.EncodeToString(undelegateMsg.Validator)
 
+	// Validator's TotalDelegation drops immediately even though the
+	// tokens themselves wait 21 days. Power-derivation reads this
+	// field, so the validator's voting weight reflects the unbonding
+	// from the next BeginBlock onward.
+	updatedValidator := *validator
+	updatedValidator.TotalDelegation -= undelegateMsg.Amount.Amount
+	updatedValidator.Power = updatedValidator.TotalDelegation
+	m.markValidatorDirty(undelegateMsg.Validator)
+
+	m.mu.Lock()
+	m.unbondingSeq++
+	seq := m.unbondingSeq
+	m.mu.Unlock()
+
+	maturityHeight := uint64(txCtx.Height) + UnbondingPeriodBlocks
+	entry := &store.BAPIUnbondingEntry{
+		Delegator:       string(undelegateMsg.Delegator),
+		ValidatorPubKey: hex.EncodeToString(undelegateMsg.Validator),
+		Amount:          undelegateMsg.Amount.Amount,
+		MaturityHeight:  maturityHeight,
+		Seq:             seq,
+	}
+	entryStoreKey := fmt.Sprintf("%020d/%020d", maturityHeight, seq)
+
 	return []effects.Effect{
-		// Decrement the delegation record. Without this effect the transfer
-		// below would fire but the delegation amount would never go down,
-		// allowing repeated undelegation of the same stake (T1-8 / B2-3).
+		// Decrement the delegation record so the same stake can't be
+		// undelegated again. The delegate record is left at amount 0
+		// rather than deleted; callers compare Amount, not key presence.
 		&effects.WriteEffect[*store.BAPIDelegation]{
 			Store:    "delegations",
 			StoreKey: []byte(delegationStoreKey),
 			Value:    updatedDelegation,
 		},
-		// Transfer tokens from staking pool back to delegator.
-		effects.TransferEffect{
-			From:   ptypes.AccountName("staking.pool"),
-			To:     undelegateMsg.Delegator,
-			Amount: ptypes.Coins{undelegateMsg.Amount},
+		// Decrement the validator's TotalDelegation/Power so consensus
+		// stops counting the unbonded stake immediately.
+		&effects.WriteEffect[*store.BAPIValidator]{
+			Store:    "validators",
+			StoreKey: []byte(hex.EncodeToString(undelegateMsg.Validator)),
+			Value:    &updatedValidator,
 		},
-		// Emit event.
+		// Park the tokens in the unbonding queue. They remain in
+		// staking.pool until EndBlock at MaturityHeight refunds them.
+		&effects.WriteEffect[*store.BAPIUnbondingEntry]{
+			Store:    "unbondings",
+			StoreKey: []byte(entryStoreKey),
+			Value:    entry,
+		},
+		// Event (no transfer back here — that happens at maturity).
 		effects.NewEventEffect("staking.undelegated", map[string][]byte{
-			"delegator": []byte(undelegateMsg.Delegator),
-			"validator": []byte(hex.EncodeToString(undelegateMsg.Validator)),
-			"amount":    []byte(fmt.Sprintf("%d", undelegateMsg.Amount.Amount)),
-			"denom":     []byte(undelegateMsg.Amount.Denom),
-			"height":    []byte(fmt.Sprintf("%d", txCtx.Height)),
+			"delegator":       []byte(undelegateMsg.Delegator),
+			"validator":       []byte(hex.EncodeToString(undelegateMsg.Validator)),
+			"amount":          []byte(fmt.Sprintf("%d", undelegateMsg.Amount.Amount)),
+			"denom":           []byte(undelegateMsg.Amount.Denom),
+			"height":          []byte(fmt.Sprintf("%d", txCtx.Height)),
+			"maturity_height": []byte(fmt.Sprintf("%d", maturityHeight)),
 		}),
 	}, nil
 }

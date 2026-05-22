@@ -356,10 +356,11 @@ func TestBAPIStakingModule_HandleUndelegate(t *testing.T) {
 
 		effs, err := mod.handleUndelegate(ctx, txCtx, msg)
 		require.NoError(t, err)
-		// PLAN B2-3: handler now returns three effects: a delegation
-		// decrement (WriteEffect), the pool→delegator transfer, and the
-		// event.
-		require.Len(t, effs, 3)
+		// Phase 2.1: handler now returns four effects — delegation
+		// decrement, validator power decrement, unbonding-queue entry,
+		// and the event. The 21-day refund transfer no longer fires
+		// here; it lands in EndBlock at maturity.
+		require.Len(t, effs, 4)
 
 		// First effect: delegation decrement.
 		writeEff, ok := effs[0].(*effects.WriteEffect[*store.BAPIDelegation])
@@ -368,14 +369,30 @@ func TestBAPIStakingModule_HandleUndelegate(t *testing.T) {
 		require.NotNil(t, writeEff.Value)
 		assert.Equal(t, uint64(400), writeEff.Value.Amount, "delegation must drop from 500 to 400")
 
-		// Second effect: transfer.
-		transferEff, ok := effs[1].(effects.TransferEffect)
-		require.True(t, ok)
-		assert.Equal(t, ptypes.AccountName("staking.pool"), transferEff.From)
-		assert.Equal(t, ptypes.AccountName("alice"), transferEff.To)
+		// Second effect: validator power decrement. Test setup gives
+		// the validator TotalDelegation 500 + a separate Delegate(500)
+		// call, so pre-undelegate TotalDelegation is 1000; undelegating
+		// 100 brings it to 900.
+		validatorEff, ok := effs[1].(*effects.WriteEffect[*store.BAPIValidator])
+		require.True(t, ok, "second effect must be *WriteEffect[*BAPIValidator], got %T", effs[1])
+		assert.Equal(t, "validators", validatorEff.Store)
+		require.NotNil(t, validatorEff.Value)
+		assert.Equal(t, uint64(900), validatorEff.Value.TotalDelegation,
+			"validator TotalDelegation must drop from 1000 to 900")
+		assert.Equal(t, uint64(900), validatorEff.Value.Power,
+			"validator Power tracks TotalDelegation")
 
-		// Third effect: event.
-		eventEff, ok := effs[2].(effects.EventEffect)
+		// Third effect: unbonding entry.
+		unbondingEff, ok := effs[2].(*effects.WriteEffect[*store.BAPIUnbondingEntry])
+		require.True(t, ok, "third effect must be *WriteEffect[*BAPIUnbondingEntry], got %T", effs[2])
+		assert.Equal(t, "unbondings", unbondingEff.Store)
+		require.NotNil(t, unbondingEff.Value)
+		assert.Equal(t, uint64(100), unbondingEff.Value.Amount)
+		assert.Equal(t, uint64(100)+UnbondingPeriodBlocks, unbondingEff.Value.MaturityHeight,
+			"unbonding entry must mature at currentHeight + UnbondingPeriodBlocks")
+
+		// Fourth effect: event.
+		eventEff, ok := effs[3].(effects.EventEffect)
 		require.True(t, ok)
 		assert.Equal(t, "staking.undelegated", eventEff.EventType)
 	})
